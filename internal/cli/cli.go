@@ -36,6 +36,16 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runProve(ctx, rest, stdout, stderr)
 	case "check":
 		return runCheck(ctx, rest, stdout, stderr)
+	case "hook":
+		return runHook(ctx, rest, stdout, stderr)
+	case "pause":
+		return runPause(ctx, rest, stdout, stderr)
+	case "resume":
+		return runResume(ctx, rest, stdout, stderr)
+	case "skip":
+		return runSkip(ctx, rest, stdout, stderr)
+	case "report":
+		return runReport(ctx, rest, stdout, stderr)
 	case "checkpoint":
 		return runCheckpoint(ctx, rest, stdout, stderr)
 	case "signal":
@@ -44,6 +54,8 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runQueue(ctx, rest, stdout, stderr)
 	case "doctor":
 		return runDoctor(ctx, rest, stdout, stderr)
+	case "cleanup":
+		return runCleanup(ctx, rest, stdout, stderr)
 	case "stats":
 		return runStats(ctx, rest, stdout, stderr)
 	default:
@@ -60,13 +72,19 @@ Usage:
   flinch <command> [flags]
 
 Commands:
-  init        Discover repository tools/workflows and write .flinch/flinch.toml
+  init        Enable this clone and optionally configure team overrides or host hooks
   prove       Verify a candidate protection against broken, fixed, and allowed cases
   check       Run active protections (--turn, --ci) or accredit an integrated SHA (--accredit)
+  hook        Host hook adapter entrypoint (--host claude|codex|antigravity --event <event>)
+  pause       Pause Flinch capture and hooks for the local clone and worktrees
+  resume      Resume Flinch capture and hooks
+  skip        Close a nominated correction silently with a logged reason
+  report      Report a suspected false positive without suppressing the protection
   checkpoint  Capture a working-tree baseline for an interactive agent turn
   signal      Record a deduplicated signal into the local episode queue
   queue       Inspect, claim, release, suspend, or record deliveries on queued episodes
   doctor      Inspect installation capability matrix, accreditation freshness, and worktrees
+  cleanup     Prune expired local checkpoints, proof trees, and log events per retention_days
   stats       Show local enforcement counts, denominators, omissions, and turn p95 latency
   version     Print CLI version
 `)

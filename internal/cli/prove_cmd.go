@@ -36,6 +36,7 @@ func runProve(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	selector := fs.String("selector", "", "exact test or rule selector")
 	command := fs.String("command", "", "command to run for command/script tool")
 	expectedSig := fs.String("expected-signal", "", "expected distinguishing failure substring or regex")
+	neighborSel := fs.String("neighbor", "", "legitimate neighboring test selector (required for test proofs)")
 	brokenRef := fs.String("broken", "", "broken Git ref")
 	fixedRef := fs.String("fixed", "WORKTREE", "fixed Git ref or WORKTREE")
 	timeoutStr := fs.String("timeout", "", "verification timeout (e.g. 120s)")
@@ -108,6 +109,9 @@ func runProve(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	}
 	if *expectedSig != "" {
 		spec.Artifact.ExpectedSignal = *expectedSig
+	}
+	if *neighborSel != "" {
+		spec.NeighborSelector = *neighborSel
 	}
 	if *brokenRef != "" {
 		spec.BrokenRef = *brokenRef

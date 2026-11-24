@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/angelnicolasc/flinch/internal/check"
+	"github.com/angelnicolasc/flinch/internal/config"
 	"github.com/angelnicolasc/flinch/internal/gitutil"
 	"github.com/angelnicolasc/flinch/internal/queue"
 )
@@ -19,9 +20,9 @@ func runCheckpoint(ctx context.Context, args []string, stdout, stderr io.Writer)
 	fs.SetOutput(stderr)
 	repoDir := fs.String("repo", "", "repository directory")
 	sessionID := fs.String("session", "default", "agent session identifier")
-	prompt := fs.String("prompt", "", "human prompt text (redacted and truncated locally)")
+	prompt := fs.String("prompt", "", "human prompt text (hashed only by default; text stored only if policy.store_prompt_text = true)")
 	promptID := fs.String("prompt-id", "", "prompt identifier")
-	snapshot := fs.Bool("snapshot", true, "capture isolated working-tree snapshot commit")
+	snapshot := fs.Bool("snapshot", true, "capture isolated working-tree tree snapshot")
 	asJSON := fs.Bool("json", false, "output JSON")
 	if err := fs.Parse(args); err != nil {
 		return 2
@@ -32,7 +33,15 @@ func runCheckpoint(ctx context.Context, args []string, stdout, stderr io.Writer)
 		fmt.Fprintf(stderr, "flinch checkpoint: %v\n", err)
 		return 2
 	}
-	cp, err := check.CaptureCheckpoint(ctx, root, *sessionID, root, *prompt, *promptID, *snapshot)
+	cfg, _, err := config.LoadOrDefault(root)
+	if err != nil {
+		fmt.Fprintf(stderr, "flinch checkpoint: %v\n", err)
+		return 2
+	}
+	cp, err := check.CaptureCheckpointWithPolicy(
+		ctx, root, *sessionID, root, *prompt, *promptID, *snapshot,
+		cfg.Policy.StorePromptText, cfg.Policy.RetentionDays,
+	)
 	if err != nil {
 		fmt.Fprintf(stderr, "flinch checkpoint: %v\n", err)
 		return 2

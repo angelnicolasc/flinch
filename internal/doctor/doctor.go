@@ -8,11 +8,14 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/angelnicolasc/flinch/internal/author"
+	"github.com/angelnicolasc/flinch/internal/check"
 	"github.com/angelnicolasc/flinch/internal/config"
 	"github.com/angelnicolasc/flinch/internal/evidence"
 	"github.com/angelnicolasc/flinch/internal/gitutil"
 	"github.com/angelnicolasc/flinch/internal/reflex"
 	"github.com/angelnicolasc/flinch/internal/runner"
+	"time"
 )
 
 // CapabilityState mirrors §2.1's verifiable onboarding matrix states.
@@ -54,72 +57,33 @@ type ReflexHealth struct {
 
 // Report is the structured diagnostic output of `flinch doctor` and `flinch init`.
 type Report struct {
-	Schema                int                        `json:"schema"`
-	RepoRoot              string                     `json:"repo_root"`
-	ConfigPresent         bool                       `json:"config_present"`
-	PolicyMode            config.PreparationMode     `json:"policy_mode"`
-	HeadSHA               string                     `json:"head_sha,omitempty"`
-	Tools                 map[string]runner.ToolInfo `json:"tools"`
-	Workflows             []string                   `json:"workflows,omitempty"`
-	ContextFiles          []string                   `json:"context_files,omitempty"`
-	Capabilities          CapabilityMatrix           `json:"capabilities"`
-	DeterministicReflexes int                        `json:"deterministic_reflexes"`
-	ProbabilisticGuides   int                        `json:"probabilistic_guides"`
-	ReflexHealth          []ReflexHealth             `json:"reflex_health,omitempty"`
-	PrunedOrphanWorktrees int                        `json:"pruned_orphan_worktrees,omitempty"`
+	Schema                 int                        `json:"schema"`
+	RepoRoot               string                     `json:"repo_root"`
+	ConfigPresent          bool                       `json:"config_present"`
+	PolicyMode             config.PreparationMode     `json:"policy_mode"`
+	HeadSHA                string                     `json:"head_sha,omitempty"`
+	Tools                  map[string]runner.ToolInfo `json:"tools"`
+	Workflows              []string                   `json:"workflows,omitempty"`
+	ContextFiles           []string                   `json:"context_files,omitempty"`
+	Capabilities           CapabilityMatrix           `json:"capabilities"`
+	DeterministicReflexes  int                        `json:"deterministic_reflexes"`
+	ProbabilisticGuides    int                        `json:"probabilistic_guides"`
+	UnrecognizedAssertions int                        `json:"no_recognized_assertion"`
+	ReflexHealth           []ReflexHealth             `json:"reflex_health,omitempty"`
+	PrunedOrphanWorktrees  int                        `json:"pruned_orphan_worktrees,omitempty"`
+	Cleanup                *check.CleanupReport       `json:"cleanup,omitempty"`
 }
 
-// DiscoverConfig inspects repoRoot and builds an initial .flinch/flinch.toml based on detected tools.
-func DiscoverConfig(ctx context.Context, repoRoot string) (config.Config, []string) {
-	cfg := config.Default()
-	tools := runner.DiscoverTools(ctx)
+// DiscoverConfig describes the same repository defaults used by hooks without a TOML file.
+func DiscoverConfig(_ context.Context, repoRoot string) (config.Config, []string) {
+	cfg := config.RepositoryDefaults(repoRoot)
 	var notes []string
-
-	if exists(filepath.Join(repoRoot, "go.mod")) {
-		cfg.Tests.Runners = append(cfg.Tests.Runners, config.TestRunner{
-			Kind:  "go",
-			Paths: []string{"**/*.go"},
-		})
-		if tools["golangci-lint"].Available && (exists(filepath.Join(repoRoot, ".golangci.yml")) || exists(filepath.Join(repoRoot, ".golangci.yaml"))) {
-			cfg.Lint = append(cfg.Lint, config.LintConfig{Kind: "golangci-lint", Paths: []string{"**/*.go"}})
-		} else {
-			cfg.Lint = append(cfg.Lint, config.LintConfig{Kind: "go-vet", Paths: []string{"**/*.go"}})
-		}
-		notes = append(notes, "Detected Go module (go.mod): enabled go test runner and go-vet.")
+	for _, item := range cfg.Tests.Runners {
+		notes = append(notes, "Detected test runner: "+item.Kind)
 	}
-
-	if exists(filepath.Join(repoRoot, "pyproject.toml")) || exists(filepath.Join(repoRoot, "pytest.ini")) {
-		cfg.Tests.Runners = append(cfg.Tests.Runners, config.TestRunner{
-			Kind:  "pytest",
-			Paths: []string{"**/*.py"},
-		})
-		if tools["ruff"].Available {
-			cfg.Lint = append(cfg.Lint, config.LintConfig{Kind: "ruff", Paths: []string{"**/*.py"}})
-		}
-		notes = append(notes, "Detected Python project: enabled pytest runner.")
+	for _, item := range cfg.Lint {
+		notes = append(notes, "Detected lint tool: "+item.Kind)
 	}
-
-	if exists(filepath.Join(repoRoot, "package.json")) {
-		if exists(filepath.Join(repoRoot, "eslint.config.mjs")) || exists(filepath.Join(repoRoot, "eslint.config.js")) || exists(filepath.Join(repoRoot, ".eslintrc.json")) {
-			cfg.Lint = append(cfg.Lint, config.LintConfig{Kind: "eslint", Paths: []string{"**/*.ts", "**/*.tsx", "**/*.js", "**/*.jsx"}})
-			notes = append(notes, "Detected ESLint configuration.")
-		}
-	}
-
-	if tools["ast-grep"].Available {
-		cfg.Lint = append(cfg.Lint, config.LintConfig{Kind: "ast-grep"})
-	}
-
-	workflows := findWorkflows(repoRoot)
-	if len(workflows) > 0 {
-		cfg.Surfaces.CIWorkflow = workflows[0]
-		notes = append(notes, "Detected GitHub Actions workflow: "+workflows[0])
-	}
-
-	if exists(filepath.Join(repoRoot, "AGENTS.md")) && exists(filepath.Join(repoRoot, "CLAUDE.md")) {
-		notes = append(notes, "Both AGENTS.md and CLAUDE.md are present; verify host context loading during installation.")
-	}
-
 	return cfg, notes
 }
 
@@ -146,16 +110,24 @@ func Run(ctx context.Context, repoRoot string, pruneWorktrees bool) (Report, err
 		ContextFiles:  findContextFiles(repoRoot),
 	}
 
+	stateDir, _ := gitutil.FlinchStateDir(ctx, repoRoot)
 	if pruneWorktrees {
 		if n, pruneErr := gitutil.PruneOrphanWorktrees(ctx, repoRoot); pruneErr == nil {
 			rep.PrunedOrphanWorktrees = n
 		}
+		if stateDir != "" {
+			if cl, clErr := check.CleanupExpired(stateDir, cfg.Policy.RetentionDays, time.Now().UTC()); clErr == nil {
+				rep.Cleanup = &cl
+			}
+		}
 	}
-
-	stateDir, _ := gitutil.FlinchStateDir(ctx, repoRoot)
 	var evStore *evidence.Store
 	if stateDir != "" {
 		evStore = evidence.NewStore(stateDir)
+		rep.UnrecognizedAssertions, err = author.CountUnrecognizedAssertions(stateDir)
+		if err != nil {
+			return Report{}, err
+		}
 	}
 
 	reflexes, _ := reflex.LoadAll(repoRoot)
@@ -214,15 +186,17 @@ func buildCapabilityMatrix(
 	hasActiveCI, hasRequiredMergeBlock, hasActiveTurn bool,
 ) CapabilityMatrix {
 	var m CapabilityMatrix
+	policySource := "repository defaults"
+	if cfgPresent {
+		policySource = "repository policy overrides"
+	}
 
 	// 1. Local capture
-	hasHost := tools["claude"].Available || tools["codex"].Available || tools["opencode"].Available
+	hasHost := tools["claude"].Available || tools["codex"].Available || tools["antigravity"].Available
 	if !tools["git"].Available {
 		m.LocalCapture = CapabilityEntry{State: CapUnavailable, Detail: "git binary not found in PATH"}
-	} else if cfgPresent && hasHost {
-		m.LocalCapture = CapabilityEntry{State: CapAvailableUntested, Detail: "policy configured and at least one supported agent host detected; run adapter contract test to mark enabled_and_tested"}
 	} else if hasHost {
-		m.LocalCapture = CapabilityEntry{State: CapAvailableUntested, Detail: "git and supported agent host detected; run `flinch init` to configure capture"}
+		m.LocalCapture = CapabilityEntry{State: CapAvailableUntested, Detail: "Git and a supported agent host detected. Hook execution has not been verified."}
 	} else {
 		m.LocalCapture = CapabilityEntry{State: CapAvailableUntested, Detail: "git capture available; no local agent host detected on PATH"}
 	}
@@ -230,19 +204,19 @@ func buildCapabilityMatrix(
 	// 2. Candidate preparation
 	if cfg.Policy.Mode == config.ModeObserveOnly {
 		m.CandidatePreparation = CapabilityEntry{State: CapUnavailable, Detail: "disabled by policy.mode = observe_only"}
-	} else if hasHost && cfgPresent {
-		m.CandidatePreparation = CapabilityEntry{State: CapAvailableUntested, Detail: "authorized mode=" + string(cfg.Policy.Mode) + "; run controlled end-to-end check to verify"}
+	} else if hasHost {
+		m.CandidatePreparation = CapabilityEntry{State: CapAvailableUntested, Detail: "Supported host detected in " + string(cfg.Policy.Mode) + " mode using " + policySource + "."}
 	} else {
-		m.CandidatePreparation = CapabilityEntry{State: CapUnavailable, Detail: "requires initialized .flinch/flinch.toml and an authorized executor"}
+		m.CandidatePreparation = CapabilityEntry{State: CapUnavailable, Detail: "A supported agent host is required for in-turn preparation."}
 	}
 
 	// 3. Turn enforcement
 	if hasActiveTurn {
 		m.TurnEnforcement = CapabilityEntry{State: CapEnabledAndTested, Detail: "at least one deterministic reflex accredited on agent_turn surface"}
-	} else if hasHost && cfgPresent {
+	} else if hasHost {
 		m.TurnEnforcement = CapabilityEntry{State: CapAvailableUntested, Detail: "agent host detected; no reflex accredited on agent_turn yet"}
 	} else {
-		m.TurnEnforcement = CapabilityEntry{State: CapUnavailable, Detail: "no supported agent host configured for turn enforcement"}
+		m.TurnEnforcement = CapabilityEntry{State: CapUnavailable, Detail: "No supported agent executable detected on PATH."}
 	}
 
 	// 4. CI observation
@@ -287,7 +261,7 @@ func findWorkflows(repoRoot string) []string {
 
 func findContextFiles(repoRoot string) []string {
 	var out []string
-	for _, name := range []string{"AGENTS.md", "CLAUDE.md", "CODEX.md"} {
+	for _, name := range []string{"AGENTS.md", "AGENTS.override.md", "CLAUDE.md", ".claude/CLAUDE.md", "GEMINI.md", ".agents/AGENTS.md", ".agents/GEMINI.md"} {
 		if exists(filepath.Join(repoRoot, name)) {
 			out = append(out, name)
 		}

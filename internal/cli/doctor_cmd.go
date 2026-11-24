@@ -5,8 +5,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"time"
 
+	"github.com/angelnicolasc/flinch/internal/check"
+	"github.com/angelnicolasc/flinch/internal/config"
 	"github.com/angelnicolasc/flinch/internal/doctor"
+	"github.com/angelnicolasc/flinch/internal/gitutil"
 )
 
 func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -38,6 +42,9 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		rep.RepoRoot, shortSHA(rep.HeadSHA), rep.ConfigPresent, rep.PolicyMode)
 	fmt.Fprintf(stdout, "Protections: %d deterministic, %d probabilistic context guides\n",
 		rep.DeterministicReflexes, rep.ProbabilisticGuides)
+	if rep.UnrecognizedAssertions > 0 {
+		fmt.Fprintf(stdout, "Local test candidates with no recognized assertion (no_recognized_assertion): %d\n", rep.UnrecognizedAssertions)
+	}
 	printCapabilityMatrix(stdout, rep.Capabilities)
 	if len(rep.ReflexHealth) > 0 {
 		fmt.Fprintln(stdout, "\nReflex accreditation:")
@@ -71,4 +78,46 @@ func printCapabilityMatrix(w io.Writer, m doctor.CapabilityMatrix) {
 	for _, r := range rows {
 		fmt.Fprintf(w, "  %-22s %-20s %s\n", r.name, r.entry.State, r.entry.Detail)
 	}
+}
+
+func runCleanup(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("cleanup", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	repoDir := fs.String("repo", "", "repository directory")
+	days := fs.Int("days", 0, "override policy.retention_days")
+	asJSON := fs.Bool("json", false, "output JSON")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+
+	root, err := resolveRepoRoot(ctx, *repoDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "flinch cleanup: %v\n", err)
+		return 2
+	}
+	cfg, _, err := config.LoadOrDefault(root)
+	if err != nil {
+		fmt.Fprintf(stderr, "flinch cleanup: %v\n", err)
+		return 2
+	}
+	retention := cfg.Policy.RetentionDays
+	if *days > 0 {
+		retention = *days
+	}
+	stateDir, err := gitutil.FlinchStateDir(ctx, root)
+	if err != nil {
+		fmt.Fprintf(stderr, "flinch cleanup: %v\n", err)
+		return 2
+	}
+	rep, err := check.CleanupExpired(stateDir, retention, time.Now().UTC())
+	if err != nil {
+		fmt.Fprintf(stderr, "flinch cleanup: %v\n", err)
+		return 2
+	}
+	if *asJSON {
+		return writeJSON(stdout, rep)
+	}
+	fmt.Fprintf(stdout, "Cleanup complete (retention=%dd): checkpoints=%d proof_trees=%d log_events=%d\n",
+		rep.RetentionDays, rep.RemovedCheckpoints, rep.RemovedProofTrees, rep.PrunedLogEvents)
+	return 0
 }
