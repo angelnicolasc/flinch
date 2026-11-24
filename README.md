@@ -99,7 +99,7 @@ Checkpoints, logs and local measurements live under the Git directory. Your work
 
 ## Feedback
 
-If you try Flinch, open an issue with the correction, the check Flinch chose and whether it caught the next occurrence.
+If you try Flinch, open an issue with the correction, the check Flinch chose and whether it caught the next occurrence. To propose a change, read [CONTRIBUTING.md](CONTRIBUTING.md). To report a vulnerability, follow [SECURITY.md](SECURITY.md).
 
 ## License
 
