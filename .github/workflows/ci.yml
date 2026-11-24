@@ -37,6 +37,29 @@ jobs:
           unformatted=$(gofmt -l cmd internal)
           if [ -n "$unformatted" ]; then echo "$unformatted"; exit 1; fi
 
+      - name: Set up Python
+        if: runner.os == 'Linux'
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Install pytest and Ruff
+        if: runner.os == 'Linux'
+        run: python -m pip install pytest==8.4.2 ruff==0.15.11
+
+      - name: Set up Node.js
+        if: runner.os == 'Linux'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.20.0'
+
+      - name: Install Vitest and Jest
+        if: runner.os == 'Linux'
+        run: |
+          npm install --prefix "$RUNNER_TEMP/flinch-js" --no-audit --no-fund vitest@3.2.4 jest@29.7.0
+          echo "FLINCH_REAL_VITEST=$RUNNER_TEMP/flinch-js/node_modules/.bin/vitest" >> "$GITHUB_ENV"
+          echo "FLINCH_REAL_JEST=$RUNNER_TEMP/flinch-js/node_modules/.bin/jest" >> "$GITHUB_ENV"
+
       - name: Run go vet
         run: go vet ./...
 
