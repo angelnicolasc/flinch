@@ -31,6 +31,12 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Check formatting
+        if: runner.os == 'Linux'
+        run: |
+          unformatted=$(gofmt -l cmd internal)
+          if [ -n "$unformatted" ]; then echo "$unformatted"; exit 1; fi
+
       - name: Run go vet
         run: go vet ./...
 
