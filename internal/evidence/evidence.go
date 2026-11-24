@@ -182,13 +182,22 @@ func NewStore(stateDir string) *Store {
 	return &Store{dir: filepath.Join(stateDir, "evidence")}
 }
 
-func (s *Store) recordPath(reflexID string, surface SurfaceKind) string {
-	safe := strings.NewReplacer("/", "_", "\\", "_", ":", "_").Replace(reflexID)
-	return filepath.Join(s.dir, fmt.Sprintf("%s-%s.json", safe, surface))
+func (s *Store) recordPath(reflexID string, surface SurfaceKind) (string, error) {
+	if !filepath.IsLocal(reflexID) || reflexID == "." || strings.ContainsAny(reflexID, "/\\:\x00") {
+		return "", fmt.Errorf("invalid check ID %q", reflexID)
+	}
+	if surface != SurfaceCI && surface != SurfaceAgentTurn {
+		return "", fmt.Errorf("unknown evidence surface %q", surface)
+	}
+	return filepath.Join(s.dir, fmt.Sprintf("%s-%s.json", reflexID, surface)), nil
 }
 
 // Save evaluates status and writes the record atomically.
 func (s *Store) Save(rec ActivationRecord) (ActivationRecord, error) {
+	path, err := s.recordPath(rec.ReflexID, rec.Surface)
+	if err != nil {
+		return ActivationRecord{}, err
+	}
 	if rec.Schema == 0 {
 		rec.Schema = 1
 	}
@@ -204,7 +213,6 @@ func (s *Store) Save(rec ActivationRecord) (ActivationRecord, error) {
 	if err != nil {
 		return ActivationRecord{}, err
 	}
-	path := s.recordPath(rec.ReflexID, rec.Surface)
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return ActivationRecord{}, err
@@ -218,7 +226,11 @@ func (s *Store) Save(rec ActivationRecord) (ActivationRecord, error) {
 
 // Load reads a single accreditation record, returning os.ErrNotExist if absent.
 func (s *Store) Load(reflexID string, surface SurfaceKind) (ActivationRecord, error) {
-	data, err := os.ReadFile(s.recordPath(reflexID, surface))
+	path, err := s.recordPath(reflexID, surface)
+	if err != nil {
+		return ActivationRecord{}, err
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return ActivationRecord{}, err
 	}

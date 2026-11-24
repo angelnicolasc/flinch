@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
+	"github.com/angelnicolasc/flinch/internal/gitutil"
 )
 
 const (
@@ -52,6 +53,7 @@ type PolicyConfig struct {
 	DraftPRFallback     bool            `toml:"draft_pr_fallback" json:"draft_pr_fallback"`
 	RetentionDays       int             `toml:"retention_days" json:"retention_days"`
 	AllowRemoteEvidence bool            `toml:"allow_remote_evidence" json:"allow_remote_evidence"`
+	StorePromptText     bool            `toml:"store_prompt_text" json:"store_prompt_text"`
 }
 
 // SourcesConfig defines which signal sources are enabled for incident capture.
@@ -181,15 +183,16 @@ func Default() Config {
 // If the file does not exist, it returns os.ErrNotExist wrapped with context.
 func Load(repoRoot string) (Config, error) {
 	path := filepath.Join(repoRoot, filepath.FromSlash(ConfigRelPath))
-	return LoadFile(path)
+	return readFile(path, RepositoryDefaults(repoRoot))
 }
 
-// LoadOrDefault reads .flinch/flinch.toml if present, or returns Default() when missing.
+// LoadOrDefault applies repository configuration over the tools discovered in this checkout.
 func LoadOrDefault(repoRoot string) (Config, bool, error) {
-	cfg, err := Load(repoRoot)
+	defaults := RepositoryDefaults(repoRoot)
+	cfg, err := readFile(filepath.Join(repoRoot, filepath.FromSlash(ConfigRelPath)), defaults)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return Default(), false, nil
+			return defaults, false, nil
 		}
 		return Config{}, false, err
 	}
@@ -198,11 +201,14 @@ func LoadOrDefault(repoRoot string) (Config, bool, error) {
 
 // LoadFile reads and validates a TOML policy file at path.
 func LoadFile(path string) (Config, error) {
+	return readFile(path, Default())
+}
+
+func readFile(path string, cfg Config) (Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return Config{}, fmt.Errorf("read config %s: %w", path, err)
 	}
-	cfg := Default()
 	md, err := toml.Decode(string(data), &cfg)
 	if err != nil {
 		return Config{}, fmt.Errorf("decode config %s: %w", path, err)
@@ -234,15 +240,7 @@ func Save(repoRoot string, cfg Config) error {
 	if err := enc.Encode(cfg); err != nil {
 		return fmt.Errorf("encode config: %w", err)
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, buf.Bytes(), 0o644); err != nil {
-		return fmt.Errorf("write temp config: %w", err)
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("commit config: %w", err)
-	}
-	return nil
+	return writeConfig(path, buf.Bytes())
 }
 
 // Validate checks schema bounds, allowed enum values, and duration syntax.
@@ -286,6 +284,11 @@ func (c Config) Validate() error {
 	if c.Severity.FixNowMax < 0 {
 		return fmt.Errorf("severity.fix_now_max must be >= 0")
 	}
+	if c.ContextGuide.File != "" {
+		if _, err := gitutil.LocalPath(".", c.ContextGuide.File); err != nil {
+			return fmt.Errorf("context_guide.file: %w", err)
+		}
+	}
 	if c.ContextGuide.MaxLines < 1 {
 		return fmt.Errorf("context_guide.max_lines must be >= 1")
 	}
@@ -298,7 +301,7 @@ func (c Config) Validate() error {
 	}
 	for i, l := range c.Lint {
 		switch l.Kind {
-		case "ast-grep", "golangci-lint", "eslint", "ruff", "go-vet", "go-build", "command":
+		case "ast-grep", "golangci-lint", "eslint", "ruff", "go-vet", "go-build", "command", "script":
 		default:
 			return fmt.Errorf("lint[%d].kind %q is not supported", i, l.Kind)
 		}
