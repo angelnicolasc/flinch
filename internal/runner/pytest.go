@@ -53,7 +53,7 @@ func RunPytest(ctx context.Context, dir string, targets []string, selector strin
 	defer os.RemoveAll(tmpDir)
 	xmlPath := filepath.Join(tmpDir, "junit.xml")
 
-	args := []string{"--continue-on-collection-errors", "--junitxml=" + xmlPath}
+	args := []string{"-p", "no:cacheprovider", "--continue-on-collection-errors", "--junitxml=" + xmlPath}
 	if selector != "" {
 		if strings.Contains(selector, "::") {
 			args = append(args, selector)
@@ -74,7 +74,7 @@ func RunPytest(ctx context.Context, dir string, targets []string, selector strin
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	runErr := cmd.Run()
+	runErr := runCandidate(cmd, dir)
 	elapsedMS := time.Since(start).Milliseconds()
 
 	pyInfo := ProbeTool(ctx, []string{"pytest"}, "--version")

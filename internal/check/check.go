@@ -14,6 +14,7 @@ import (
 	"github.com/angelnicolasc/flinch/internal/evidence"
 	"github.com/angelnicolasc/flinch/internal/finding"
 	"github.com/angelnicolasc/flinch/internal/gitutil"
+	"github.com/angelnicolasc/flinch/internal/prove"
 	"github.com/angelnicolasc/flinch/internal/reflex"
 	"github.com/angelnicolasc/flinch/internal/runner"
 )
@@ -90,9 +91,10 @@ type AccreditOptions struct {
 }
 
 // RunTurn evaluates trusted active reflexes over changes made during the current turn,
-// applying baseline occurrence diffing, integrity checks, a single unified deadline,
-// and shared continuation loop guards (§8.1).
+// applying baseline occurrence diffing, integrity checks, a single unified deadline
+// covering startup through completion, and shared continuation/test budgets (D5, D6, P5-P8).
 func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnOptions) (Result, error) {
+	ctx = runner.WithCommandRepository(ctx, repoRoot)
 	start := time.Now()
 	if opts.SessionID == "" {
 		opts.SessionID = "default"
@@ -112,8 +114,29 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 		ContinuationsLimit: cfg.Loop.MaxContinuationsPerTurn,
 	}
 
-	stateDir, err := gitutil.FlinchStateDir(ctx, repoRoot)
+	// Single unified deadline starts immediately to cover startup, loading, integrity, static scans, and fast tests (D5, P6).
+	tctx, cancel := context.WithTimeout(ctx, deadline)
+	defer cancel()
+
+	failOpenIfExpired := func() (Result, bool) {
+		if errors.Is(tctx.Err(), context.DeadlineExceeded) {
+			res.Decision = DecisionAllowTimeout
+			res.Blocking = false
+			res.DurationMS = time.Since(start).Milliseconds()
+			return res, true
+		}
+		return res, false
+	}
+
+	if expiredRes, expired := failOpenIfExpired(); expired {
+		return expiredRes, nil
+	}
+
+	stateDir, err := gitutil.FlinchStateDir(tctx, repoRoot)
 	if err != nil {
+		if expiredRes, expired := failOpenIfExpired(); expired {
+			return expiredRes, nil
+		}
 		return res, err
 	}
 
@@ -127,8 +150,16 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 		res.ContinuationsUsed = cp.TotalContinuations
 	}
 
-	currentStatus, err := gitutil.WorkingTreeStatus(ctx, repoRoot)
+	if hasCP && cp.SnapshotSHA == "" {
+		res.Decision = DecisionAdvise
+		res.DurationMS = time.Since(start).Milliseconds()
+		return res, nil
+	}
+	currentStatus, err := gitutil.WorkingTreeStatus(tctx, repoRoot)
 	if err != nil {
+		if expiredRes, expired := failOpenIfExpired(); expired {
+			return expiredRes, nil
+		}
 		return res, err
 	}
 	var touched []string
@@ -141,9 +172,12 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 	}
 	res.TouchedFiles = touched
 
-	// Load ONLY reflexes present in the trusted revision so proposed/unreviewed rules stay isolated (§8.1).
-	reflexes, err := loadTrustedReflexes(ctx, repoRoot, cfg.Executor.TrustedRef)
+	// Load ONLY reflexes present in the trusted revision so proposed rules stay isolated and deleted records stay visible (D6, P8).
+	reflexes, err := loadTrustedReflexes(tctx, repoRoot, cfg.Executor.TrustedRef)
 	if err != nil {
+		if expiredRes, expired := failOpenIfExpired(); expired {
+			return expiredRes, nil
+		}
 		return res, err
 	}
 	if len(reflexes) == 0 {
@@ -151,9 +185,9 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 		return res, nil
 	}
 
-	// Single unified deadline covering startup, integrity, static scans, and fast tests (§8.1).
-	tctx, cancel := context.WithTimeout(ctx, deadline)
-	defer cancel()
+	if expiredRes, expired := failOpenIfExpired(); expired {
+		return expiredRes, nil
+	}
 
 	if opts.CheckIntg {
 		viols, intgErr := CheckIntegrity(tctx, repoRoot, cfg.Executor.TrustedRef, reflexes, touched)
@@ -162,16 +196,11 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 		}
 	}
 
-	// Prepare baseline comparison ref if checkpoint snapshot or HEAD is available.
+	// Compare against the checkout as it was when the human turn opened.
 	baselineRef := ""
-	if hasCP && cp.SnapshotSHA != "" {
+	if hasCP {
 		baselineRef = cp.SnapshotSHA
-	} else if hasCP && cp.HeadSHA != "" {
-		baselineRef = cp.HeadSHA
-	} else if headSHA, ok, _ := gitutil.HeadSHA(tctx, repoRoot); ok {
-		baselineRef = headSHA
 	}
-
 	var baselineWT *gitutil.Worktree
 	defer func() {
 		if baselineWT != nil {
@@ -198,6 +227,11 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 	if maxTestDur <= 0 {
 		maxTestDur = 5 * time.Second
 	}
+	testBudgetDur, _ := config.ParseDuration(cfg.Loop.TestBudget)
+	if testBudgetDur <= 0 {
+		testBudgetDur = 20 * time.Second
+	}
+	testBudgetDirty := false
 
 	for _, r := range reflexes {
 		if errors.Is(tctx.Err(), context.DeadlineExceeded) {
@@ -232,26 +266,137 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 
 		switch r.EffectiveRung() {
 		case reflex.RungTest:
-			if r.Proof != nil && r.Proof.RuntimeMS > 0 && time.Duration(r.Proof.RuntimeMS)*time.Millisecond > maxTestDur {
+			localProof, err := reflex.LocalProof(tctx, repoRoot, r)
+			if err != nil {
+				res.SkippedControls = append(res.SkippedControls, SkippedControl{ReflexID: r.ID, Reason: "could not read local test measurement"})
+				continue
+			}
+			if localProof != nil && time.Duration(localProof.RuntimeMS)*time.Millisecond > maxTestDur {
 				res.SkippedControls = append(res.SkippedControls, SkippedControl{
 					ReflexID: r.ID,
-					Reason:   fmt.Sprintf("test runtime %dms exceeds max_test_runtime (%s); deferred to CI", r.Proof.RuntimeMS, maxTestDur),
+					Reason:   fmt.Sprintf("test runtime %dms exceeds max_test_runtime (%s); deferred to CI", localProof.RuntimeMS, maxTestDur),
 				})
 				continue
 			}
-			tFindings, skipReason := runTurnTestReflex(tctx, repoRoot, r, remaining)
+			remTestBudget := testBudgetDur - time.Duration(cp.TestBudgetUsedMS)*time.Millisecond
+			if remTestBudget <= 0 {
+				res.SkippedControls = append(res.SkippedControls, SkippedControl{
+					ReflexID: r.ID,
+					Reason:   fmt.Sprintf("logical turn test budget exhausted (%dms/%s); deferred to CI", cp.TestBudgetUsedMS, testBudgetDur),
+				})
+				continue
+			}
+			runCap := min(remaining, remTestBudget, maxTestDur)
+			// A fresh clone has the reviewed record but no local timing. Charge a
+			// bounded run at the checkpoint and reuse its result for comparison.
+			var measuredBaseline *runner.TestRunResult
+			if localProof == nil || localProof.RuntimeMS <= 0 {
+				wt, err := ensureBaselineWT()
+				if err != nil {
+					continue
+				}
+				measuredAt := time.Now()
+				calibration, skip := runTestReflexRaw(tctx, repoRoot, wt.Path, r, runCap)
+				elapsed := max(time.Since(measuredAt).Milliseconds(), int64(1))
+				cp.TestBudgetUsedMS += elapsed
+				testBudgetDirty = true
+				cases := prove.SelectedCases(calibration.Cases, r.Artifact.Selector)
+				if skip != "" || calibration.ExitCode != 0 || len(cases) != 1 || cases[0].Outcome != runner.OutcomePass || time.Duration(elapsed)*time.Millisecond > maxTestDur {
+					res.SkippedControls = append(res.SkippedControls, SkippedControl{ReflexID: r.ID, Reason: "no qualifying fast pass at the turn checkpoint"})
+					continue
+				}
+				if err := reflex.SaveLocalProof(tctx, repoRoot, r, reflex.ProofSummary{RuntimeMS: elapsed}); err != nil {
+					continue
+				}
+				measuredBaseline = &calibration
+				runCap = min(maxTestDur, time.Until(deadlineTime(tctx, deadline)), testBudgetDur-time.Duration(cp.TestBudgetUsedMS)*time.Millisecond)
+				if runCap <= 0 {
+					continue
+				}
+			}
+			testStart := time.Now()
+			currResult, skipReason := runTestReflexRaw(tctx, repoRoot, repoRoot, r, runCap)
+			elapsedTest := time.Since(testStart).Milliseconds()
+			if hasCP {
+				cp.TestBudgetUsedMS += elapsedTest
+				testBudgetDirty = true
+			}
 			if skipReason != "" {
 				res.SkippedControls = append(res.SkippedControls, SkippedControl{ReflexID: r.ID, Reason: skipReason})
 				continue
 			}
-			for _, f := range tFindings {
+			currFailing := failingTestCases(currResult, r.Artifact.Selector)
+			if len(currFailing) == 0 {
+				continue
+			}
+
+			// Baseline comparison for test reflexes (D5, P5, P7): a test already failing at checkpoint never blocks.
+			wt, wtErr := ensureBaselineWT()
+			if wtErr != nil {
+				res.SkippedControls = append(res.SkippedControls, SkippedControl{
+					ReflexID: r.ID,
+					Reason:   fmt.Sprintf("baseline unavailable for test reflex (%v); failing open", wtErr),
+				})
+				continue
+			}
+			remAfterCurr := time.Until(deadlineTime(tctx, deadline))
+			remTestAfterCurr := testBudgetDur - time.Duration(cp.TestBudgetUsedMS)*time.Millisecond
+			if remTestAfterCurr < remAfterCurr {
+				remAfterCurr = remTestAfterCurr
+			}
+			if remAfterCurr <= 0 {
+				res.SkippedControls = append(res.SkippedControls, SkippedControl{
+					ReflexID: r.ID,
+					Reason:   "test budget exhausted before baseline comparison; failing open",
+				})
+				continue
+			}
+			baseStart := time.Now()
+			var baseResult runner.TestRunResult
+			var baseSkip string
+			if measuredBaseline != nil {
+				baseResult = *measuredBaseline
+			} else {
+				baseResult, baseSkip = runTestReflexRaw(tctx, repoRoot, wt.Path, r, min(remAfterCurr, maxTestDur))
+			}
+			if hasCP && measuredBaseline == nil {
+				cp.TestBudgetUsedMS += time.Since(baseStart).Milliseconds()
+				testBudgetDirty = true
+			}
+			if baseSkip != "" {
+				res.SkippedControls = append(res.SkippedControls, SkippedControl{
+					ReflexID: r.ID,
+					Reason:   fmt.Sprintf("baseline test run inconclusive (%s); failing open", baseSkip),
+				})
+				continue
+			}
+
+			baseOutcomeByName := make(map[string]runner.TestOutcome, len(baseResult.Cases))
+			for _, bc := range baseResult.Cases {
+				baseOutcomeByName[bc.Name] = bc.Outcome
+			}
+			for _, fc := range currFailing {
+				// Block ONLY when the case demonstrably passed at the baseline checkpoint (D5, P5).
+				if baseOutcomeByName[fc.Name] != runner.OutcomePass {
+					continue
+				}
 				res.Findings = append(res.Findings, FindingWithReflex{
 					ReflexID:   r.ID,
 					Rung:       r.EffectiveRung(),
 					Obligation: r.Obligation,
 					FixHint:    r.Artifact.FixHint,
 					Mode:       turnMode,
-					Finding:    f,
+					Finding: finding.Finding{
+						Tool:      r.Artifact.Tool,
+						Rule:      r.ID,
+						Selector:  fc.Name,
+						Path:      r.Artifact.Path,
+						StartLine: 1,
+						EndLine:   1,
+						Symbol:    fc.Name,
+						Message:   fmt.Sprintf("regression test %s failed: %s", fc.Name, fc.Output),
+						Severity:  "error",
+					},
 				})
 			}
 		case reflex.RungLint, reflex.RungStructure, reflex.RungGuard:
@@ -269,20 +414,38 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 				continue
 			}
 
-			// Diff against turn baseline so pre-existing debt never blocks (§8.1).
-			var newOnes []finding.Finding
-			if wt, wtErr := ensureBaselineWT(); wtErr == nil {
-				baseTargets := existingFilesIn(wt.Path, matchedFiles)
-				var baseFiltered []finding.Finding
-				if len(baseTargets) > 0 || r.Artifact.Tool == "go-build" || r.Artifact.Tool == "command" || r.Artifact.Tool == "script" {
-					if baseRun, baseErr := runner.RunArtifact(tctx, wt.Path, r.Artifact, targetArgForTool(r.Artifact.Tool, baseTargets), time.Until(deadlineTime(tctx, remaining))); baseErr == nil && !baseRun.TimedOut {
-						baseFiltered = filterFindings(r, baseRun.Findings)
-					}
-				}
-				newOnes = finding.NewFindings(baseFiltered, currFiltered, nil)
-			} else {
-				newOnes = currFiltered
+			// Diff against turn baseline so pre-existing debt never blocks (D5, P5, P7).
+			// If novelty cannot be established because the baseline tree or run fails, fail open.
+			wt, wtErr := ensureBaselineWT()
+			if wtErr != nil {
+				res.SkippedControls = append(res.SkippedControls, SkippedControl{
+					ReflexID: r.ID,
+					Reason:   fmt.Sprintf("baseline tree unavailable (%v); failing open so pre-existing debt cannot block", wtErr),
+				})
+				continue
 			}
+			baseTargets := existingFilesIn(wt.Path, matchedFiles)
+			var baseFiltered []finding.Finding
+			if len(baseTargets) > 0 || isWholeTreeTool(r.Artifact.Tool) {
+				baseRem := time.Until(deadlineTime(tctx, remaining))
+				if baseRem <= 0 {
+					res.SkippedControls = append(res.SkippedControls, SkippedControl{
+						ReflexID: r.ID,
+						Reason:   "turn deadline reached before baseline comparison; failing open",
+					})
+					continue
+				}
+				baseRun, baseErr := runner.RunArtifact(tctx, wt.Path, r.Artifact, targetArgForTool(r.Artifact.Tool, baseTargets), baseRem)
+				if baseErr != nil || baseRun.TimedOut || (baseRun.ExitCode != 0 && len(baseRun.Findings) == 0) {
+					res.SkippedControls = append(res.SkippedControls, SkippedControl{
+						ReflexID: r.ID,
+						Reason:   "baseline comparison failed or timed out; failing open so pre-existing debt cannot block",
+					})
+					continue
+				}
+				baseFiltered = filterFindings(r, baseRun.Findings)
+			}
+			newOnes := finding.NewFindings(baseFiltered, currFiltered, nil)
 
 			for _, f := range newOnes {
 				res.Findings = append(res.Findings, FindingWithReflex{
@@ -297,8 +460,14 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 		}
 	}
 
+	if hasCP && testBudgetDirty {
+		if err := SaveCheckpoint(stateDir, cp); err != nil {
+			return res, err
+		}
+	}
+
 	// Determine final turn decision, honoring fail-open timeout, missing checkpoint advise-only, and loop guard (§8.1).
-	if errors.Is(tctx.Err(), context.DeadlineExceeded) && len(res.Findings) == 0 && len(res.IntegrityViolations) == 0 {
+	if tctx.Err() != nil {
 		res.Decision = DecisionAllowTimeout
 		res.DurationMS = time.Since(start).Milliseconds()
 		return res, nil
@@ -371,7 +540,11 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 		cp.FindingContinuations[key]++
 	}
 	res.ContinuationsUsed = cp.TotalContinuations
-	_ = SaveCheckpoint(stateDir, cp)
+	if err := SaveCheckpoint(stateDir, cp); err != nil {
+		res.Blocking = false
+		res.Decision = DecisionAllow
+		return res, err
+	}
 
 	res.DiagnosticMessage = FormatAgentDiagnostic(res)
 	res.DurationMS = time.Since(start).Milliseconds()
@@ -380,6 +553,7 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 
 // RunCI evaluates all active deterministic reflexes on the shared CI surface (§3.2, §8.1).
 func RunCI(ctx context.Context, repoRoot string, cfg config.Config, opts CIOptions) (Result, error) {
+	ctx = runner.WithCommandRepository(ctx, repoRoot)
 	start := time.Now()
 	timeout := opts.Timeout
 	if timeout <= 0 {
@@ -521,6 +695,7 @@ func RunCI(ctx context.Context, repoRoot string, cfg config.Config, opts CIOptio
 // reflex is present, passes on clean code, fails on its materialized in-scope negative control
 // with attributed selector ID, and passes on its allowed near-miss cases (§3.2).
 func Accredit(ctx context.Context, repoRoot string, cfg config.Config, opts AccreditOptions) ([]evidence.ActivationRecord, error) {
+	ctx = runner.WithCommandRepository(ctx, repoRoot)
 	ref := opts.IntegratedRef
 	if strings.TrimSpace(ref) == "" {
 		ref = "HEAD"
@@ -809,25 +984,42 @@ func loadTrustedReflexes(ctx context.Context, repoRoot, trustedRef string) ([]re
 		trustedRef = "HEAD"
 	}
 	if _, err := gitutil.ResolveRef(ctx, repoRoot, trustedRef); err != nil {
-		// Unborn repo: load directly from working tree.
-		return reflex.LoadAll(repoRoot)
+		// A missing revision provides no reviewed records.
+		return nil, nil
 	}
-	// Load all reflexes on disk, keeping only those that also exist in trustedRef so proposed rules stay isolated (§8.1).
-	all, err := reflex.LoadAll(repoRoot)
+	// Enumerate and parse reflexes directly from trustedRef so deleted records remain visible
+	// to integrity checks and unreviewed working-tree reflexes stay isolated (D6, P8).
+	files, err := gitutil.ListTreeFiles(ctx, repoRoot, trustedRef, reflex.ReflexesRelDir)
+	if err != nil {
+		return nil, err
+	}
+	legacy, err := gitutil.ListTreeFiles(ctx, repoRoot, trustedRef, reflex.LegacyRelDir)
 	if err != nil {
 		return nil, err
 	}
 	var trusted []reflex.Reflex
-	for _, r := range all {
-		rel := filepath.ToSlash(filepath.Join(reflex.ReflexesRelDir, r.ID+".yml"))
-		if _, err := gitutil.FileAtRef(ctx, repoRoot, trustedRef, rel); err == nil {
+	seen := map[string]bool{}
+	for _, rel := range append(files, legacy...) {
+		if !strings.HasSuffix(rel, ".yml") && !strings.HasSuffix(rel, ".yaml") {
+			continue
+		}
+		data, readErr := gitutil.FileAtRef(ctx, repoRoot, trustedRef, rel)
+		if readErr != nil {
+			continue
+		}
+		r, parseErr := reflex.ParseBytes(data, rel)
+		if parseErr != nil || strings.TrimSuffix(filepath.Base(rel), filepath.Ext(rel)) != r.ID {
+			continue
+		}
+		if !seen[r.ID] {
 			trusted = append(trusted, r)
+			seen[r.ID] = true
 		}
 	}
 	return trusted, nil
 }
 
-func runTurnTestReflex(ctx context.Context, repoRoot string, r reflex.Reflex, timeout time.Duration) ([]finding.Finding, string) {
+func runTestReflexRaw(ctx context.Context, repoRoot, rootDir string, r reflex.Reflex, timeout time.Duration) (runner.TestRunResult, string) {
 	var pkgs []string
 	if r.Artifact.Path != "" {
 		dir := filepath.ToSlash(filepath.Dir(r.Artifact.Path))
@@ -841,36 +1033,58 @@ func runTurnTestReflex(ctx context.Context, repoRoot string, r reflex.Reflex, ti
 	var err error
 	switch r.Artifact.Tool {
 	case "go-test", "go":
-		tr, err = runner.RunGoTest(ctx, repoRoot, pkgs, r.Artifact.Selector, timeout)
+		tr, err = runner.RunGoTest(ctx, rootDir, pkgs, r.Artifact.Selector, timeout)
 	case "pytest":
-		tr, err = runner.RunPytest(ctx, repoRoot, []string{r.Artifact.Path}, r.Artifact.Selector, timeout)
+		tr, err = runner.RunPytest(ctx, rootDir, []string{r.Artifact.Path}, r.Artifact.Selector, timeout)
+	case "vitest":
+		tr, err = runner.RunVitest(ctx, repoRoot, rootDir, []string{r.Artifact.Path}, r.Artifact.Selector, timeout)
+	case "jest":
+		tr, err = runner.RunJest(ctx, repoRoot, rootDir, []string{r.Artifact.Path}, r.Artifact.Selector, timeout)
 	default:
-		return nil, fmt.Sprintf("unsupported test tool %q", r.Artifact.Tool)
+		return runner.TestRunResult{}, fmt.Sprintf("unsupported test tool %q", r.Artifact.Tool)
 	}
 	if err != nil {
-		return nil, fmt.Sprintf("test runner failed: %v", err)
+		return runner.TestRunResult{}, fmt.Sprintf("test runner failed: %v", err)
 	}
 	if tr.TimedOut {
-		return nil, "test timed out; deferred to CI"
+		return runner.TestRunResult{}, "test timed out; deferred to CI"
 	}
 	if tr.CompileOnly {
-		return nil, "package failed to compile; deferred to build/CI"
+		return runner.TestRunResult{}, "package failed to compile; deferred to build/CI"
+	}
+	return tr, ""
+}
+
+func failingTestCases(tr runner.TestRunResult, selector string) []runner.TestCaseResult {
+	cases := prove.SelectedCases(tr.Cases, selector)
+	if len(cases) == 1 && cases[0].Outcome == runner.OutcomeFail {
+		return cases
+	}
+	return nil
+}
+
+func isWholeTreeTool(tool string) bool {
+	return tool == "go-build" || tool == "command" || tool == "script"
+}
+
+func runTurnTestReflex(ctx context.Context, repoRoot string, r reflex.Reflex, timeout time.Duration) ([]finding.Finding, string) {
+	tr, skip := runTestReflexRaw(ctx, repoRoot, repoRoot, r, timeout)
+	if skip != "" {
+		return nil, skip
 	}
 	var out []finding.Finding
-	for _, c := range tr.Cases {
-		if c.Outcome == runner.OutcomeFail {
-			out = append(out, finding.Finding{
-				Tool:      r.Artifact.Tool,
-				Rule:      r.ID,
-				Selector:  c.Name,
-				Path:      r.Artifact.Path,
-				StartLine: 1,
-				EndLine:   1,
-				Symbol:    c.Name,
-				Message:   fmt.Sprintf("regression test %s failed: %s", c.Name, c.Output),
-				Severity:  "error",
-			})
-		}
+	for _, c := range failingTestCases(tr, r.Artifact.Selector) {
+		out = append(out, finding.Finding{
+			Tool:      r.Artifact.Tool,
+			Rule:      r.ID,
+			Selector:  c.Name,
+			Path:      r.Artifact.Path,
+			StartLine: 1,
+			EndLine:   1,
+			Symbol:    c.Name,
+			Message:   fmt.Sprintf("regression test %s failed: %s", c.Name, c.Output),
+			Severity:  "error",
+		})
 	}
 	return out, ""
 }

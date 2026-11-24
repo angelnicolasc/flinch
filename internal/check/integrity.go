@@ -38,8 +38,15 @@ func CheckIntegrity(ctx context.Context, repoRoot, trustedRef string, reflexes [
 		if !r.IsDeterministic() {
 			continue
 		}
-		// 1. Check .flinch/reflexes/<id>.yml against trustedRef.
-		relReflex := filepath.ToSlash(filepath.Join(reflex.ReflexesRelDir, r.ID+".yml"))
+		// Use the stored path so older records remain covered.
+		relReflex := r.FilePath
+		if filepath.IsAbs(relReflex) {
+			relReflex, _ = filepath.Rel(repoRoot, relReflex)
+		}
+		if !filepath.IsLocal(relReflex) {
+			relReflex = filepath.Join(reflex.ReflexesRelDir, r.ID+".yml")
+		}
+		relReflex = filepath.ToSlash(relReflex)
 		trustedReflexBytes, err := gitutil.FileAtRef(ctx, repoRoot, trustedRef, relReflex)
 		if err == nil {
 			currPath := filepath.Join(repoRoot, filepath.FromSlash(relReflex))
@@ -61,19 +68,28 @@ func CheckIntegrity(ctx context.Context, repoRoot, trustedRef string, reflexes [
 			}
 		}
 
-		// 2. Check referenced artifact file (rule, linter config, or regression test) against trustedRef.
+		// 2. Check referenced artifact (protected case/rule, not unrelated edits in the same file; D6).
 		if r.Artifact.Path != "" {
 			relArt := filepath.ToSlash(strings.TrimPrefix(filepath.Clean(r.Artifact.Path), "./"))
 			trustedArtBytes, artErr := gitutil.FileAtRef(ctx, repoRoot, trustedRef, relArt)
 			if artErr == nil {
 				currArt, readErr := os.ReadFile(filepath.Join(repoRoot, filepath.FromSlash(relArt)))
-				if errors.Is(readErr, os.ErrNotExist) || (readErr == nil && !bytes.Equal(normalizeLineEndings(trustedArtBytes), normalizeLineEndings(currArt))) {
+				if errors.Is(readErr, os.ErrNotExist) {
 					violations = append(violations, IntegrityViolation{
 						ReflexID: r.ID,
 						Path:     relArt,
 						Kind:     "artifact_modified",
-						Detail:   fmt.Sprintf("artifact %s backing reflex %s was modified relative to %s", relArt, r.ID, trustedRef),
+						Detail:   fmt.Sprintf("artifact %s backing reflex %s was deleted relative to %s", relArt, r.ID, trustedRef),
 					})
+				} else if readErr == nil {
+					if intact, reason := artifactCaseIntact(r, trustedArtBytes, currArt); !intact {
+						violations = append(violations, IntegrityViolation{
+							ReflexID: r.ID,
+							Path:     relArt,
+							Kind:     "artifact_modified",
+							Detail:   reason,
+						})
+					}
 				}
 			}
 		}

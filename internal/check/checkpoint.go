@@ -13,11 +13,13 @@ import (
 	"time"
 
 	"github.com/angelnicolasc/flinch/internal/gitutil"
+	"github.com/angelnicolasc/flinch/internal/localstate"
 	"github.com/angelnicolasc/flinch/internal/redact"
 )
 
 // TurnCheckpoint captures the minimal working-tree baseline at turn start and tracks
-// continuation counts across logical turn retries (§8.1, §9).
+// continuation and test budgets across logical turn retries (D5, D11, P6, P10).
+// By default no prompt text is persisted; only identifiers and PromptHash are stored.
 type TurnCheckpoint struct {
 	Schema               int               `json:"schema"`
 	SessionID            string            `json:"session_id"`
@@ -27,10 +29,24 @@ type TurnCheckpoint struct {
 	SnapshotSHA          string            `json:"snapshot_sha,omitempty"`
 	FileHashes           map[string]string `json:"file_hashes"`
 	Prompt               string            `json:"prompt,omitempty"`
+	PromptHash           string            `json:"prompt_hash,omitempty"`
 	PromptID             string            `json:"prompt_id,omitempty"`
 	StartedAt            time.Time         `json:"started_at"`
 	TotalContinuations   int               `json:"total_continuations"`
 	FindingContinuations map[string]int    `json:"finding_continuations,omitempty"`
+	TestBudgetUsedMS     int64             `json:"test_budget_used_ms,omitempty"`
+	PreviousStartSnap    string            `json:"previous_start_snap,omitempty"`
+	PreviousEndSnap      string            `json:"previous_end_snap,omitempty"`
+	AuthoringStartedAt   *time.Time        `json:"authoring_started_at,omitempty"`
+	AuthoringAttempted   bool              `json:"authoring_attempted,omitempty"`
+	LineRepairUsed       bool              `json:"line_repair_used,omitempty"`
+	SkipReason           string            `json:"skip_reason,omitempty"`
+	// These receipts belong to this human turn. They contain digests only.
+	HostTurnID         string          `json:"host_turn_id,omitempty"`
+	Closed             bool            `json:"closed,omitempty"`
+	StopReceipts       map[string]bool `json:"stop_receipts,omitempty"`
+	ContinuationHash   string          `json:"continuation_hash,omitempty"`
+	ContinuationTurnID string          `json:"continuation_turn_id,omitempty"`
 }
 
 func checkpointPath(stateDir, sessionID, worktreeID string) string {
@@ -38,9 +54,55 @@ func checkpointPath(stateDir, sessionID, worktreeID string) string {
 	return filepath.Join(stateDir, "turns", hex.EncodeToString(h[:12])+".json")
 }
 
-// CaptureCheckpoint records the current working-tree file hashes, HEAD SHA, and optional
-// redacted prompt for a session + worktree without mutating Git state.
+// LockTurn serializes hook deliveries that update the same checkpoint in
+// separate CLI processes. A small fixed set of stripes bounds lock-file growth.
+func LockTurn(ctx context.Context, stateDir, sessionID, worktreeID string) (func(), error) {
+	hash := sha256.Sum256([]byte(sessionID + "|" + worktreeID))
+	dir := filepath.Join(stateDir, "locks", "turns")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, err
+	}
+	path := filepath.Join(dir, fmt.Sprintf("%02x.lock", hash[0]))
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		release, acquired, err := localstate.TryLock(path)
+		if err != nil || acquired {
+			return release, err
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+// HashPrompt returns a deterministic SHA-256 digest of trimmed prompt text without storing text (D11).
+func HashPrompt(prompt string) string {
+	trimmed := strings.TrimSpace(prompt)
+	if trimmed == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(trimmed))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// CaptureCheckpoint records the current working-tree file hashes, HEAD SHA, and prompt digest
+// for a session + worktree without mutating Git state or persisting prompt text by default (D11, P10).
 func CaptureCheckpoint(ctx context.Context, repoRoot, sessionID, worktreeID, prompt, promptID string, captureSnapshot bool) (TurnCheckpoint, error) {
+	return CaptureCheckpointWithPolicy(ctx, repoRoot, sessionID, worktreeID, prompt, promptID, captureSnapshot, false, 0)
+}
+
+// CaptureCheckpointWithPolicy captures a turn checkpoint honoring storePromptText and retentionDays (D11).
+func CaptureCheckpointWithPolicy(
+	ctx context.Context,
+	repoRoot, sessionID, worktreeID, prompt, promptID string,
+	captureSnapshot, storePromptText bool,
+	retentionDays int,
+	hostTurnID ...string,
+) (TurnCheckpoint, error) {
 	if sessionID == "" {
 		sessionID = "default"
 	}
@@ -51,6 +113,17 @@ func CaptureCheckpoint(ctx context.Context, repoRoot, sessionID, worktreeID, pro
 	if err != nil {
 		return TurnCheckpoint{}, err
 	}
+	if retentionDays > 0 {
+		_, _ = CleanupExpired(stateDir, retentionDays, time.Now().UTC())
+	}
+
+	// Preserve previous turn's edit snapshots for correction nomination (D2).
+	var prevStart, prevEnd string
+	if prev, ok, _ := LoadCheckpoint(stateDir, sessionID, worktreeID); ok {
+		prevStart = prev.PreviousStartSnap
+		prevEnd = prev.PreviousEndSnap
+	}
+
 	headSHA, _, err := gitutil.HeadSHA(ctx, repoRoot)
 	if err != nil {
 		return TurnCheckpoint{}, err
@@ -66,6 +139,10 @@ func CaptureCheckpoint(ctx context.Context, repoRoot, sessionID, worktreeID, pro
 
 	now := time.Now().UTC()
 	th := sha256.Sum256([]byte(fmt.Sprintf("%s|%s|%d", sessionID, worktreeID, now.UnixNano())))
+	storedPrompt := ""
+	if storePromptText {
+		storedPrompt = redact.Prompt(prompt, 500)
+	}
 	cp := TurnCheckpoint{
 		Schema:               1,
 		SessionID:            sessionID,
@@ -74,11 +151,17 @@ func CaptureCheckpoint(ctx context.Context, repoRoot, sessionID, worktreeID, pro
 		HeadSHA:              headSHA,
 		SnapshotSHA:          snapSHA,
 		FileHashes:           hashes,
-		Prompt:               redact.Prompt(prompt, 500),
+		Prompt:               storedPrompt,
+		PromptHash:           HashPrompt(prompt),
 		PromptID:             promptID,
 		StartedAt:            now,
 		TotalContinuations:   0,
 		FindingContinuations: make(map[string]int),
+		PreviousStartSnap:    prevStart,
+		PreviousEndSnap:      prevEnd,
+	}
+	if len(hostTurnID) > 0 {
+		cp.HostTurnID = hostTurnID[0]
 	}
 	if err := SaveCheckpoint(stateDir, cp); err != nil {
 		return TurnCheckpoint{}, err
@@ -96,15 +179,19 @@ func SaveCheckpoint(stateDir string, cp TurnCheckpoint) error {
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".checkpoint-*.tmp")
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
 		return err
 	}
-	return nil
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 // LoadCheckpoint reads the checkpoint for (sessionID, worktreeID). Returns (zero, false, nil) if absent.

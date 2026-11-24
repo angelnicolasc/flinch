@@ -35,6 +35,12 @@ func RunArtifact(ctx context.Context, rootDir string, art reflex.Artifact, targe
 	)
 	switch art.Tool {
 	case "go-vet":
+		// A custom analyzer is a repository-selected executable.
+		if strings.Contains(art.Command, "-vettool=") {
+			if err := checkCommandTrust(ctx, rootDir); err != nil {
+				return res, err
+			}
+		}
 		res, err = runGoVet(tctx, rootDir, art, targetFiles)
 	case "go-build":
 		res, err = runGoBuild(tctx, rootDir, art)
@@ -47,6 +53,9 @@ func RunArtifact(ctx context.Context, rootDir string, art reflex.Artifact, targe
 	case "ast-grep":
 		res, err = runAstGrep(tctx, rootDir, art, targetFiles)
 	case "command", "script":
+		if err := checkCommandTrust(ctx, rootDir); err != nil {
+			return res, err
+		}
 		res, err = runCommandArtifact(tctx, rootDir, art, targetFiles)
 	default:
 		return LintRunResult{}, fmt.Errorf("unsupported lint/structure tool %q", art.Tool)
@@ -82,7 +91,7 @@ func runGoVet(ctx context.Context, rootDir string, art reflex.Artifact, targetFi
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	err := runCandidate(cmd, rootDir)
 
 	res := LintRunResult{
 		Tool:        "go-vet",
@@ -147,19 +156,19 @@ func ParseGoVetJSON(rootDir string, data []byte) []finding.Finding {
 }
 
 func runGoBuild(ctx context.Context, rootDir string, art reflex.Artifact) (LintRunResult, error) {
-	args := []string{"build", "./..."}
+	args := []string{"build", "-o", os.DevNull, "./..."}
 	start := time.Now()
 	cmd := exec.CommandContext(ctx, "go", args...)
 	cmd.Dir = rootDir
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	err := runCandidate(cmd, rootDir)
 
 	res := LintRunResult{
 		Tool:        "go-build",
 		ToolVersion: ProbeTool(ctx, []string{"go"}, "version").Version,
-		Command:     "go build ./...",
+		Command:     "go " + strings.Join(args, " "),
 		DurationMS:  time.Since(start).Milliseconds(),
 		Stdout:      stdout.String(),
 		Stderr:      stderr.String(),
@@ -181,7 +190,7 @@ func runGoBuild(ctx context.Context, rootDir string, art reflex.Artifact) (LintR
 }
 
 func runRuff(ctx context.Context, rootDir string, art reflex.Artifact, targetFiles []string) (LintRunResult, error) {
-	args := []string{"check", "--output-format", "json"}
+	args := []string{"check", "--no-cache", "--output-format", "json"}
 	if art.Path != "" {
 		args = append(args, "--config", art.Path)
 	}
@@ -201,7 +210,7 @@ func runRuff(ctx context.Context, rootDir string, art reflex.Artifact, targetFil
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	err := runCandidate(cmd, rootDir)
 
 	res := LintRunResult{
 		Tool:        "ruff",
@@ -280,7 +289,7 @@ func runESLint(ctx context.Context, rootDir string, art reflex.Artifact, targetF
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	err := runCandidate(cmd, rootDir)
 
 	res := LintRunResult{
 		Tool:        "eslint",
@@ -360,7 +369,7 @@ func runGolangCILint(ctx context.Context, rootDir string, art reflex.Artifact, t
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	err := runCandidate(cmd, rootDir, golangciCacheEnv(ctx, rootDir)...)
 
 	res := LintRunResult{
 		Tool:        "golangci-lint",
@@ -443,7 +452,7 @@ func runAstGrep(ctx context.Context, rootDir string, art reflex.Artifact, target
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	err := runCandidate(cmd, rootDir)
 
 	res := LintRunResult{
 		Tool:        "ast-grep",
@@ -536,15 +545,14 @@ func runCommandArtifact(ctx context.Context, rootDir string, art reflex.Artifact
 	start := time.Now()
 	cmd := shellCommand(ctx, art.Command)
 	cmd.Dir = rootDir
-	env := append(os.Environ(), "FLINCH_ROOT="+rootDir)
+	var extra []string
 	if len(targetFiles) > 0 {
-		env = append(env, "FLINCH_FILES="+strings.Join(targetFiles, " "))
+		extra = append(extra, "FLINCH_FILES="+strings.Join(targetFiles, " "))
 	}
-	cmd.Env = env
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+	err := runCandidate(cmd, rootDir, extra...)
 
 	res := LintRunResult{
 		Tool:       art.Tool,

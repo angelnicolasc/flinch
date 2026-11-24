@@ -4,8 +4,12 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/angelnicolasc/flinch/internal/gitutil"
+	"github.com/angelnicolasc/flinch/internal/reflex"
 )
 
 func TestParseGoTestJSONSeparatesBuildFailSkipAndSubtests(t *testing.T) {
@@ -114,5 +118,32 @@ func TestDemo(t *testing.T) {
 	}
 	if !foundOK {
 		t.Fatalf("expected TestDemo/ok pass, got %+v", res.Cases)
+	}
+}
+
+// Regression test (D11, P10): Executing a candidate command via RunArtifact must not expose user secrets.
+func TestCommandArtifactUsesFilteredEnvironment(t *testing.T) {
+	t.Setenv("FLINCH_TEST_SECRET_KEY", "never-leak-this-secret")
+	dir := t.TempDir()
+	if _, _, err := gitutil.Run(context.Background(), dir, nil, "init"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := EnableCommands(context.Background(), dir); err != nil {
+		t.Fatal(err)
+	}
+	// Cross-platform printenv using `go env`? Even simpler: print the specific var via shell.
+	cmd := "echo %FLINCH_TEST_SECRET_KEY%"
+	if os.PathSeparator == '/' {
+		cmd = "echo $FLINCH_TEST_SECRET_KEY"
+	}
+	res, err := RunArtifact(context.Background(), dir, reflex.Artifact{
+		Tool:    "command",
+		Command: cmd,
+	}, nil, 10*time.Second)
+	if err != nil {
+		t.Fatalf("RunArtifact failed: %v", err)
+	}
+	if strings.Contains(res.Stdout+res.Stderr, "never-leak-this-secret") {
+		t.Fatalf("command artifact leaked parent env secret: stdout=%q stderr=%q", res.Stdout, res.Stderr)
 	}
 }

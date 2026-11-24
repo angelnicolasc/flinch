@@ -76,8 +76,13 @@ func TestClamp(t *testing.T) {
 			t.Fatalf("Clamp(10, 5) = %d, want 5", got)
 		}
 	})
-	t.Run("useless_always_passes", func(t *testing.T) {
+	t.Run("below_max_unchanged", func(t *testing.T) {
 		if got := Clamp(3, 5); got != 3 {
+			t.Fatalf("Clamp(3, 5) = %d, want 3", got)
+		}
+	})
+	t.Run("useless_always_passes", func(t *testing.T) {
+		if got := Clamp(2, 5); got != 2 {
 			t.Fatalf("got %d", got)
 		}
 	})
@@ -85,6 +90,12 @@ func TestClamp(t *testing.T) {
 		if Clamp(10, 5) != 5 {
 			t.Skip("skipping when broken")
 		}
+	})
+	t.Run("always_skipped", func(t *testing.T) {
+		t.Skip("always skipped")
+	})
+	t.Run("always_fails", func(t *testing.T) {
+		t.Fatalf("neighbor fails on fixed")
 	})
 }
 `), 0o644); err != nil {
@@ -98,7 +109,7 @@ func TestProveGoTestDistinguishesVerifiedRefutedSkippedAndCompileOnly(t *testing
 	repo, brokenSHA, fixedSHA := setupGoCalcRepo(t)
 	ctx := context.Background()
 
-	// 1. Valid regression test -> Verified.
+	// 1. Valid regression test with legitimate neighbor -> Verified.
 	rep, err := Verify(ctx, repo, CandidateSpec{
 		ID:         "clamp-caps-above-max",
 		Version:    1,
@@ -110,14 +121,18 @@ func TestProveGoTestDistinguishesVerifiedRefutedSkippedAndCompileOnly(t *testing
 			Selector:       "TestClamp/caps_above_max",
 			ExpectedSignal: "want 5",
 		},
-		BrokenRef: brokenSHA,
-		FixedRef:  fixedSHA,
+		NeighborSelector: "TestClamp/below_max_unchanged",
+		BrokenRef:        brokenSHA,
+		FixedRef:         fixedSHA,
 	}, Options{})
 	if err != nil {
 		t.Fatalf("Verify failed: %v", err)
 	}
 	if rep.Verdict != VerdictVerified {
 		t.Fatalf("expected verified, got %s (reason=%s, err=%s)", rep.Verdict, rep.Reason, rep.ActionableError)
+	}
+	if len(rep.AllowedResults) != 1 || !rep.AllowedResults[0].Passed {
+		t.Fatalf("expected recorded passing neighbor result, got %+v", rep.AllowedResults)
 	}
 
 	// 2. Weak test that also passes on broken tree -> Refuted (passed_on_broken).
@@ -131,8 +146,9 @@ func TestProveGoTestDistinguishesVerifiedRefutedSkippedAndCompileOnly(t *testing
 			Path:     "calc_test.go",
 			Selector: "TestClamp/useless_always_passes",
 		},
-		BrokenRef: brokenSHA,
-		FixedRef:  fixedSHA,
+		NeighborSelector: "TestClamp/below_max_unchanged",
+		BrokenRef:        brokenSHA,
+		FixedRef:         fixedSHA,
 	}, Options{})
 	if err != nil {
 		t.Fatalf("Verify weak failed: %v", err)
@@ -141,7 +157,7 @@ func TestProveGoTestDistinguishesVerifiedRefutedSkippedAndCompileOnly(t *testing
 		t.Fatalf("expected refuted/passed_on_broken, got %s/%s", repRefuted.Verdict, repRefuted.Reason)
 	}
 
-	// 3. Skip->pass test -> Inconclusive (skipped_on_broken), NEVER verified (§5.2, §11)!
+	// 3. Skip->pass test -> Inconclusive (skipped_on_broken), NEVER verified (D4, §5.2)!
 	repSkip, err := Verify(ctx, repo, CandidateSpec{
 		ID:         "clamp-skip",
 		Version:    1,
@@ -152,8 +168,9 @@ func TestProveGoTestDistinguishesVerifiedRefutedSkippedAndCompileOnly(t *testing
 			Path:     "calc_test.go",
 			Selector: "TestClamp/skips_on_broken",
 		},
-		BrokenRef: brokenSHA,
-		FixedRef:  fixedSHA,
+		NeighborSelector: "TestClamp/below_max_unchanged",
+		BrokenRef:        brokenSHA,
+		FixedRef:         fixedSHA,
 	}, Options{})
 	if err != nil {
 		t.Fatalf("Verify skip failed: %v", err)
@@ -176,14 +193,100 @@ func TestProveGoTestDistinguishesVerifiedRefutedSkippedAndCompileOnly(t *testing
 		OverlayFiles: map[string]string{
 			"api_test.go": "package calc\nimport \"testing\"\nfunc TestNewHelper(t *testing.T) { if NewFixOnlyHelper() != 42 { t.Fatal() } }\n",
 		},
-		BrokenRef: brokenSHA,
-		FixedRef:  fixedSHA,
+		NeighborSelector: "TestClamp/below_max_unchanged",
+		BrokenRef:        brokenSHA,
+		FixedRef:         fixedSHA,
 	}, Options{})
 	if err != nil {
 		t.Fatalf("Verify compile-only failed: %v", err)
 	}
 	if repCompile.Verdict != VerdictInconclusive || repCompile.Reason != ReasonCompileOnly {
 		t.Fatalf("expected inconclusive/compile_only, got %s/%s (%s)", repCompile.Verdict, repCompile.Reason, repCompile.ActionableError)
+	}
+}
+
+// Regression tests (D4, P4):
+// - Empty selector never matches every test case; returns inconclusive/missing_selector.
+// - Test proof without a legitimate neighbor never returns verified; returns inconclusive/missing_allowed_case.
+// - Skipped or failing neighbor prevents verification.
+func TestProveTestEnforcesExactSelectorAndRealNeighborRun(t *testing.T) {
+	repo, brokenSHA, fixedSHA := setupGoCalcRepo(t)
+	ctx := context.Background()
+
+	// Direct unit check on matchTestCases with empty selector.
+	if matched := matchTestCases(nil, ""); len(matched) != 0 {
+		t.Fatalf("empty selector must not match any cases")
+	}
+
+	// 1. Empty selector -> inconclusive/missing_selector.
+	repEmpty, err := Verify(ctx, repo, CandidateSpec{
+		ID:               "empty-sel",
+		Version:          1,
+		Rung:             reflex.RungTest,
+		Obligation:       "Must specify selector.",
+		Artifact:         reflex.Artifact{Tool: "go-test", Path: "calc_test.go", Selector: ""},
+		NeighborSelector: "TestClamp/below_max_unchanged",
+		BrokenRef:        brokenSHA,
+		FixedRef:         fixedSHA,
+	}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repEmpty.Verdict != VerdictInconclusive || repEmpty.Reason != ReasonMissingSelector {
+		t.Fatalf("expected inconclusive/missing_selector, got %s/%s", repEmpty.Verdict, repEmpty.Reason)
+	}
+
+	// 2. Missing neighbor -> inconclusive/missing_allowed_case.
+	repNoNeighbor, err := Verify(ctx, repo, CandidateSpec{
+		ID:         "no-neighbor",
+		Version:    1,
+		Rung:       reflex.RungTest,
+		Obligation: "Clamp caps above max.",
+		Artifact:   reflex.Artifact{Tool: "go-test", Path: "calc_test.go", Selector: "TestClamp/caps_above_max"},
+		BrokenRef:  brokenSHA,
+		FixedRef:   fixedSHA,
+	}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repNoNeighbor.Verdict != VerdictInconclusive || repNoNeighbor.Reason != ReasonMissingAllowedCase {
+		t.Fatalf("expected inconclusive/missing_allowed_case without neighbor, got %s/%s", repNoNeighbor.Verdict, repNoNeighbor.Reason)
+	}
+
+	// 3. Skipped neighbor -> inconclusive/neighbor_skipped.
+	repSkipNeighbor, err := Verify(ctx, repo, CandidateSpec{
+		ID:               "skip-neighbor",
+		Version:          1,
+		Rung:             reflex.RungTest,
+		Obligation:       "Clamp caps above max.",
+		Artifact:         reflex.Artifact{Tool: "go-test", Path: "calc_test.go", Selector: "TestClamp/caps_above_max"},
+		NeighborSelector: "TestClamp/always_skipped",
+		BrokenRef:        brokenSHA,
+		FixedRef:         fixedSHA,
+	}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repSkipNeighbor.Verdict != VerdictInconclusive || repSkipNeighbor.Reason != ReasonNeighborSkipped {
+		t.Fatalf("expected inconclusive/neighbor_skipped, got %s/%s", repSkipNeighbor.Verdict, repSkipNeighbor.Reason)
+	}
+
+	// 4. Failing neighbor -> refuted/neighbor_failed.
+	repFailNeighbor, err := Verify(ctx, repo, CandidateSpec{
+		ID:               "fail-neighbor",
+		Version:          1,
+		Rung:             reflex.RungTest,
+		Obligation:       "Clamp caps above max.",
+		Artifact:         reflex.Artifact{Tool: "go-test", Path: "calc_test.go", Selector: "TestClamp/caps_above_max"},
+		NeighborSelector: "TestClamp/always_fails",
+		BrokenRef:        brokenSHA,
+		FixedRef:         fixedSHA,
+	}, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repFailNeighbor.Verdict != VerdictRefuted || repFailNeighbor.Reason != ReasonNeighborFailed {
+		t.Fatalf("expected refuted/neighbor_failed, got %s/%s", repFailNeighbor.Verdict, repFailNeighbor.Reason)
 	}
 }
 

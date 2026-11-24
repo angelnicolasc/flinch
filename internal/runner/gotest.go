@@ -60,7 +60,7 @@ func RunGoTest(ctx context.Context, dir string, packages []string, testSelector 
 	tctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	args := []string{"test", "-json", "-count=1"}
+	args := []string{"test", "-json", "-fullpath", "-count=1"}
 	if pattern := AnchorGoTestRunPattern(testSelector); pattern != "" {
 		args = append(args, "-run", pattern)
 	}
@@ -73,7 +73,7 @@ func RunGoTest(ctx context.Context, dir string, packages []string, testSelector 
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	runErr := cmd.Run()
+	runErr := runCandidate(cmd, dir)
 	elapsedMS := time.Since(start).Milliseconds()
 
 	goInfo := ProbeTool(ctx, []string{"go"}, "version")

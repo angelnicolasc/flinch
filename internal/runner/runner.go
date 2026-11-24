@@ -3,6 +3,7 @@ package runner
 import (
 	"bytes"
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -71,6 +72,13 @@ func ProbeTool(ctx context.Context, names []string, versionArgs ...string) ToolI
 	info := ToolInfo{Name: names[0]}
 	var foundPath string
 	for _, n := range names {
+		if filepath.IsAbs(n) {
+			if _, err := os.Stat(n); err == nil {
+				foundPath = n
+				break
+			}
+			continue
+		}
 		if p, err := exec.LookPath(n); err == nil {
 			foundPath = p
 			break
@@ -108,15 +116,16 @@ func DiscoverTools(ctx context.Context) map[string]ToolInfo {
 	}{
 		{"git", []string{"git"}, []string{"--version"}},
 		{"go", []string{"go"}, []string{"version"}},
+		{"node", []string{"node"}, []string{"--version"}},
 		{"gh", []string{"gh"}, []string{"--version"}},
 		{"ast-grep", []string{"ast-grep", "sg"}, []string{"--version"}},
 		{"golangci-lint", []string{"golangci-lint"}, []string{"--version"}},
 		{"eslint", []string{"eslint"}, []string{"--version"}},
 		{"ruff", []string{"ruff"}, []string{"--version"}},
 		{"pytest", []string{"pytest"}, []string{"--version"}},
-		{"claude", []string{"claude"}, []string{"--version"}},
-		{"codex", []string{"codex"}, []string{"--version"}},
-		{"opencode", []string{"opencode"}, []string{"--version"}},
+		{"claude", claudeCandidateNames(), []string{"--version"}},
+		{"codex", codexCandidateNames(), []string{"--version"}},
+		{"antigravity", []string{"agy"}, []string{"--version"}},
 	}
 	res := make(map[string]ToolInfo, len(probes))
 	for _, p := range probes {
@@ -125,6 +134,30 @@ func DiscoverTools(ctx context.Context) map[string]ToolInfo {
 		res[p.key] = info
 	}
 	return res
+}
+
+func claudeCandidateNames() []string {
+	names := []string{"claude"}
+	if home, err := os.UserHomeDir(); err == nil {
+		if runtime.GOOS == "windows" {
+			names = append(names, filepath.Join(home, ".local", "bin", "claude.exe"))
+		} else {
+			names = append(names, filepath.Join(home, ".local", "bin", "claude"))
+		}
+	}
+	return names
+}
+
+func codexCandidateNames() []string {
+	names := []string{"codex"}
+	if home, err := os.UserHomeDir(); err == nil {
+		if runtime.GOOS == "windows" {
+			names = append(names, filepath.Join(home, ".local", "bin", "codex.exe"))
+		} else {
+			names = append(names, filepath.Join(home, ".local", "bin", "codex"))
+		}
+	}
+	return names
 }
 
 func shellCommand(ctx context.Context, command string) *exec.Cmd {

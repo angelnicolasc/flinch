@@ -24,15 +24,21 @@ type FailureReason string
 
 const (
 	ReasonNone                    FailureReason = ""
+	ReasonMissingSelector         FailureReason = "missing_selector"
+	ReasonMissingAllowedCase      FailureReason = "missing_allowed_case"
 	ReasonPassedOnBroken          FailureReason = "passed_on_broken"
 	ReasonFailedOnFixed           FailureReason = "failed_on_fixed"
 	ReasonCompileOnly             FailureReason = "compile_only"
 	ReasonFixedCompileError       FailureReason = "fixed_compile_error"
 	ReasonSkippedOnBroken         FailureReason = "skipped_on_broken"
 	ReasonSkippedOnFixed          FailureReason = "skipped_on_fixed"
+	ReasonNeighborFailed          FailureReason = "neighbor_failed"
+	ReasonNeighborSkipped         FailureReason = "neighbor_skipped"
+	ReasonNeighborNotExecuted     FailureReason = "neighbor_not_executed"
 	ReasonFlaky                   FailureReason = "flaky"
 	ReasonSelectorNotExecuted     FailureReason = "selector_not_executed"
 	ReasonUnexpectedFailureSignal FailureReason = "unexpected_failure_signal"
+	ReasonNoRecognizedAssertion   FailureReason = "no_recognized_assertion"
 	ReasonMissedBrokenIncident    FailureReason = "missed_broken_incident"
 	ReasonFlaggedFixedCode        FailureReason = "flagged_fixed_code"
 	ReasonFlaggedAllowedCase      FailureReason = "flagged_allowed_case"
@@ -42,15 +48,18 @@ const (
 	ReasonSetupError              FailureReason = "setup_error"
 )
 
-// AllowedCase specifies a legitimate near-miss file materialized at an in-scope product path (§4, §5).
+// AllowedCase specifies a legitimate near-miss case (D4, P4).
+// For lint/structure proofs, TargetPath + Content/SourceFile materializes a file in scope.
+// For test proofs, Selector names an executable legitimate neighboring test case.
 type AllowedCase struct {
 	Name       string `yaml:"name,omitempty" json:"name,omitempty"`
-	TargetPath string `yaml:"target_path" json:"target_path"`
+	TargetPath string `yaml:"target_path,omitempty" json:"target_path,omitempty"`
 	SourceFile string `yaml:"source_file,omitempty" json:"source_file,omitempty"`
 	Content    string `yaml:"content,omitempty" json:"content,omitempty"`
+	Selector   string `yaml:"selector,omitempty" json:"selector,omitempty"`
 }
 
-// CandidateSpec defines the candidate protection and its three proof inputs (§5.1).
+// CandidateSpec defines the candidate protection and its proof inputs (D4, §5.1).
 type CandidateSpec struct {
 	ID                   string            `yaml:"id" json:"id"`
 	Version              int               `yaml:"version" json:"version"`
@@ -63,6 +72,7 @@ type CandidateSpec struct {
 	FixedRef             string            `yaml:"fixed_ref" json:"fixed_ref"` // Git ref or "WORKTREE"
 	Patch                string            `yaml:"patch,omitempty" json:"patch,omitempty"`
 	OverlayFiles         map[string]string `yaml:"overlay_files,omitempty" json:"overlay_files,omitempty"`
+	NeighborSelector     string            `yaml:"neighbor_selector,omitempty" json:"neighbor_selector,omitempty"`
 	AllowedCases         []AllowedCase     `yaml:"allowed_cases,omitempty" json:"allowed_cases,omitempty"`
 	TestPackages         []string          `yaml:"test_packages,omitempty" json:"test_packages,omitempty"`
 	TestSupportGlobs     []string          `yaml:"test_support_globs,omitempty" json:"test_support_globs,omitempty"`

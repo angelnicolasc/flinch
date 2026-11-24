@@ -17,6 +17,7 @@ import (
 	"github.com/angelnicolasc/flinch/internal/gitutil"
 	"github.com/angelnicolasc/flinch/internal/prove"
 	"github.com/angelnicolasc/flinch/internal/reflex"
+	"github.com/angelnicolasc/flinch/internal/runner"
 )
 
 func gitCommit(t *testing.T, repo, msg string) string {
@@ -357,6 +358,9 @@ func TestGrayMatterSeed27And55EndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if _, err := runner.EnableCommands(ctx, originRepo); err != nil {
+		t.Fatal(err)
+	}
 	writeRepoFile(t, originRepo, "go.mod", "module example.com/graymatter-seed\n\ngo 1.26\n")
 	writeRepoFile(t, originRepo, "pkg/provider/client.go", brokenPR27Client)
 	brokenPR27SHA := gitCommit(t, originRepo, "base before PR #27 (unbounded response read)")
@@ -544,6 +548,9 @@ func TestGrayMatterSeed27And55EndToEnd(t *testing.T) {
 		t.Fatalf("git clone to second clone: %v", err)
 	}
 
+	if _, err := runner.EnableCommands(ctx, secondClone); err != nil {
+		t.Fatal(err)
+	}
 	// Capture turn checkpoint in second clone.
 	out.Reset()
 	errBuf.Reset()
@@ -581,18 +588,30 @@ func TestGrayMatterSeed27And55EndToEnd(t *testing.T) {
 		t.Fatalf("expected LimitReader fix hint in diagnostic: %s", turnRes.DiagnosticMessage)
 	}
 
-	// Shared CI check in Clone 2 (works even without any local agent plugin or checkpoint!) MUST also block!
-	out.Reset()
-	errBuf.Reset()
-	code = cli.Run(ctx, []string{
-		"check", "--repo", secondClone, "--ci", "--format", "github",
-	}, &out, &errBuf)
-	if code != 1 || !strings.Contains(out.String(), "::error file=pkg/memory/consolidate.go") {
-		t.Fatalf("expected CI check to block with GitHub annotation on #55 variant, code=%d out=%s err=%s", code, out.String(), errBuf.String())
+	// Shared protection WITHOUT Flinch installed (P2, D11, Acceptance §2):
+	// Run the repository's own native command directly in Clone 2!
+	nativeFailCmd := exec.CommandContext(ctx, "go", "run", "./tools/bodycheck")
+	nativeFailCmd.Dir = secondClone
+	nativeFailOut, nativeFailErr := nativeFailCmd.CombinedOutput()
+	if nativeFailErr == nil {
+		t.Fatalf("expected repository native command to reject #55 variant without Flinch, got exit 0: %s", string(nativeFailOut))
+	}
+	if !strings.Contains(string(nativeFailOut), "pkg/memory/consolidate.go") || !strings.Contains(string(nativeFailOut), "unbounded-response-body-read") {
+		t.Fatalf("expected native command to flag pkg/memory/consolidate.go with unbounded-response-body-read, got: %s", string(nativeFailOut))
+	}
+	if strings.Contains(string(nativeFailOut), "probe_allowed.go") {
+		t.Fatalf("native command must NOT flag legitimate 2-byte neighbor probe_allowed.go, got: %s", string(nativeFailOut))
 	}
 
-	// Fix #55 with io.LimitReader while keeping the 2-byte allowed file -> both `--turn` and `--ci` pass!
+	// Fix #55 with io.LimitReader while keeping the 2-byte allowed file -> native command AND `--turn` pass!
 	writeRepoFile(t, secondClone, "pkg/memory/consolidate.go", fixedPR55Consolidate)
+	nativePassCmd := exec.CommandContext(ctx, "go", "run", "./tools/bodycheck")
+	nativePassCmd.Dir = secondClone
+	nativePassOut, nativePassErr := nativePassCmd.CombinedOutput()
+	if nativePassErr != nil {
+		t.Fatalf("expected repository native command to pass after fix with 2-byte neighbor present, err=%v out=%s", nativePassErr, string(nativePassOut))
+	}
+
 	out.Reset()
 	errBuf.Reset()
 	code = cli.Run(ctx, []string{
@@ -600,15 +619,6 @@ func TestGrayMatterSeed27And55EndToEnd(t *testing.T) {
 	}, &out, &errBuf)
 	if code != 0 {
 		t.Fatalf("expected turn check exit 0 after fixing #55, got %d: out=%s err=%s", code, out.String(), errBuf.String())
-	}
-
-	out.Reset()
-	errBuf.Reset()
-	code = cli.Run(ctx, []string{
-		"check", "--repo", secondClone, "--ci",
-	}, &out, &errBuf)
-	if code != 0 {
-		t.Fatalf("expected CI check exit 0 after fixing #55, got %d: out=%s err=%s", code, out.String(), errBuf.String())
 	}
 }
 
@@ -627,7 +637,7 @@ func TestLivePytestAndRuffVerification(t *testing.T) {
 	brokenSHA := gitCommit(t, repo, "broken python clamp")
 
 	writeRepoFile(t, repo, "calc.py", "def clamp(n, maximum):\n    return min(n, maximum)\n")
-	writeRepoFile(t, repo, "test_calc.py", "import pytest\nfrom calc import clamp\n\ndef test_caps_above_max():\n    assert clamp(10, 5) == 5\n\ndef test_skip_on_broken():\n    if clamp(10, 5) != 5:\n        pytest.skip('skip when broken')\n")
+	writeRepoFile(t, repo, "test_calc.py", "import pytest\nfrom calc import clamp\n\ndef test_caps_above_max():\n    assert clamp(10, 5) == 5\n\ndef test_below_max_unchanged():\n    assert clamp(3, 5) == 3\n\ndef test_skip_on_broken():\n    if clamp(10, 5) != 5:\n        pytest.skip('skip when broken')\n")
 	fixedSHA := gitCommit(t, repo, "fix python clamp")
 
 	rep, err := prove.Verify(ctx, repo, prove.CandidateSpec{
@@ -640,8 +650,9 @@ func TestLivePytestAndRuffVerification(t *testing.T) {
 			Path:     "test_calc.py",
 			Selector: "test_calc.py::test_caps_above_max",
 		},
-		BrokenRef: brokenSHA,
-		FixedRef:  fixedSHA,
+		NeighborSelector: "test_calc.py::test_below_max_unchanged",
+		BrokenRef:        brokenSHA,
+		FixedRef:         fixedSHA,
 	}, prove.Options{})
 	if err != nil {
 		t.Fatalf("pytest prove failed: %v", err)
@@ -661,8 +672,9 @@ func TestLivePytestAndRuffVerification(t *testing.T) {
 			Path:     "test_calc.py",
 			Selector: "test_calc.py::test_skip_on_broken",
 		},
-		BrokenRef: brokenSHA,
-		FixedRef:  fixedSHA,
+		NeighborSelector: "test_calc.py::test_below_max_unchanged",
+		BrokenRef:        brokenSHA,
+		FixedRef:         fixedSHA,
 	}, prove.Options{})
 	if err != nil {
 		t.Fatalf("pytest skip prove failed: %v", err)

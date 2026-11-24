@@ -3,7 +3,7 @@ package prove
 import (
 	"bytes"
 	"context"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -25,6 +25,7 @@ type Options struct {
 // Verify runs the isolated §5 broken/fixed/candidate verification contract and returns
 // a reproducible VerificationReport without modifying the user's working tree or Git index.
 func Verify(ctx context.Context, repoRoot string, spec CandidateSpec, opts Options) (VerificationReport, error) {
+	ctx = runner.WithCommandRepository(ctx, repoRoot)
 	start := time.Now()
 	if spec.Version == 0 {
 		spec.Version = 1
@@ -59,6 +60,14 @@ func Verify(ctx context.Context, repoRoot string, spec CandidateSpec, opts Optio
 		ExpectedSignal:   spec.Artifact.ExpectedSignal,
 		VerifiedAt:       time.Now().UTC(),
 	}
+
+	if err := prepareProofInputs(repoRoot, &spec); err != nil {
+		report.Verdict = VerdictInconclusive
+		report.Reason = ReasonSetupError
+		report.ActionableError = err.Error()
+		return report, nil
+	}
+	report.CandidateHash = spec.CandidateHash()
 
 	if !r.IsDeterministic() {
 		report.Verdict = VerdictInconclusive
@@ -128,6 +137,30 @@ func Verify(ctx context.Context, repoRoot string, spec CandidateSpec, opts Optio
 }
 
 func verifyTest(ctx context.Context, repoRoot string, spec CandidateSpec, report *VerificationReport, timeout time.Duration) {
+	selector := strings.TrimSpace(spec.Artifact.Selector)
+	if selector == "" {
+		report.Verdict = VerdictInconclusive
+		report.Reason = ReasonMissingSelector
+		report.ActionableError = "a non-empty exact selector is required for test proofs (D4)"
+		return
+	}
+
+	neighbors := collectTestNeighbors(spec)
+	if len(neighbors) == 0 {
+		report.Verdict = VerdictInconclusive
+		report.Reason = ReasonMissingAllowedCase
+		report.ActionableError = "test proof requires at least one legitimate neighbor case (neighbor_selector or allowed_cases[].selector; D4)"
+		return
+	}
+	for _, nb := range neighbors {
+		if normalizeSelectorForCompare(nb.Selector) == normalizeSelectorForCompare(selector) {
+			report.Verdict = VerdictInconclusive
+			report.Reason = ReasonMissingAllowedCase
+			report.ActionableError = fmt.Sprintf("legitimate neighbor selector %q must differ from the broken-case selector %q", nb.Selector, selector)
+			return
+		}
+	}
+
 	changes, err := gitutil.DiffFileChanges(ctx, repoRoot, report.BrokenRef, report.FixedRef)
 	if err != nil {
 		report.Verdict = VerdictInconclusive
@@ -152,11 +185,15 @@ func verifyTest(ctx context.Context, repoRoot string, spec CandidateSpec, report
 		return
 	}
 
+	expected := strings.TrimSpace(spec.Artifact.ExpectedSignal)
+	sites := findAssertionSites(wt.Path, spec)
+	if expected == "" {
+		report.ExpectedSignal = sites.description()
+	}
 	pkgs := inferTestTargets(spec, changes)
-	selector := spec.Artifact.Selector
 
 	// 1. Run target test on fixed tree (must execute and pass cleanly without skips).
-	fixedRun, err := runTestRunner(ctx, wt.Path, spec.Artifact.Tool, pkgs, selector, timeout)
+	fixedRun, err := runTestRunner(ctx, repoRoot, wt.Path, spec.Artifact.Tool, pkgs, selector, timeout)
 	if err != nil {
 		report.Verdict = VerdictInconclusive
 		report.Reason = ReasonSetupError
@@ -183,9 +220,16 @@ func verifyTest(ctx context.Context, repoRoot string, spec CandidateSpec, report
 	if len(fixedMatched) == 0 {
 		report.Verdict = VerdictInconclusive
 		report.Reason = ReasonSelectorNotExecuted
-		report.ActionableError = fmt.Sprintf("selector %q did not execute any test case on fixed tree", selector)
+		report.ActionableError = fmt.Sprintf("selector %q did not execute any matching test case on fixed tree", selector)
 		return
 	}
+	if len(fixedMatched) != 1 {
+		report.Verdict = VerdictInconclusive
+		report.Reason = ReasonSelectorNotExecuted
+		report.ActionableError = "test selector resolved to more than one case"
+		return
+	}
+	fixedID := caseIdentity(fixedMatched[0], wt.Path)
 	for _, tc := range fixedMatched {
 		switch tc.Outcome {
 		case runner.OutcomeSkip:
@@ -208,158 +252,179 @@ func verifyTest(ctx context.Context, repoRoot string, spec CandidateSpec, report
 		}
 	}
 
-	// 2. Revert ONLY product files to broken state, keeping test and support files intact (§5.1).
-	classifier := NewClassifier(
-		spec.TestSupportGlobs,
-		spec.ExplicitProductFiles,
-		spec.ExplicitTestFiles,
-		spec.ExplicitSupportFiles,
-	)
-	revertedProduct := 0
+	if fixedRun.ExitCode != 0 {
+		report.Verdict, report.Reason = VerdictInconclusive, ReasonSetupError
+		report.ActionableError = "fixed runner exited unsuccessfully despite the selected case passing"
+		return
+	}
+	missingSites := expected == "" && len(sites.lines) == 0
+	if !missingSites && !verifyTestNeighbors(ctx, repoRoot, wt, spec, pkgs, neighbors, fixedID, report, timeout) {
+		return
+	}
+
+	classifier := NewClassifier(spec.TestSupportGlobs, spec.ExplicitProductFiles, spec.ExplicitTestFiles, spec.ExplicitSupportFiles)
+	var previousOutcome runner.TestOutcome
+	var firstFailure assertionFailure
+	for attempt := 0; attempt < 2; attempt++ {
+		run, treePath, err := runBrokenTest(ctx, repoRoot, spec, *report, changes, classifier, pkgs, selector, timeout)
+		if err != nil {
+			report.Verdict, report.Reason = VerdictInconclusive, ReasonSetupError
+			report.ActionableError = err.Error()
+			return
+		}
+		report.BrokenRuntimeMS += run.DurationMS
+		if run.TimedOut {
+			report.Verdict, report.Reason = VerdictInconclusive, ReasonTimeout
+			report.ActionableError = "test timed out on the broken tree"
+			return
+		}
+		if run.CompileOnly {
+			report.Verdict, report.Reason = VerdictInconclusive, ReasonCompileOnly
+			report.ActionableError = "test could not compile or load on the broken tree"
+			return
+		}
+		matched := matchTestCases(run.Cases, selector)
+		if len(matched) != 1 || caseIdentity(matched[0], treePath) != fixedID {
+			report.Verdict, report.Reason = VerdictInconclusive, ReasonSelectorNotExecuted
+			report.ActionableError = "the same unique test case must execute on both trees"
+			return
+		}
+		tc := matched[0]
+		switch tc.Outcome {
+		case runner.OutcomeSkip:
+			report.Verdict, report.Reason = VerdictInconclusive, ReasonSkippedOnBroken
+			report.ActionableError = "selected case was skipped on the broken tree"
+			return
+		case runner.OutcomeFail:
+			if run.ExitCode != 1 {
+				report.Verdict, report.Reason = VerdictInconclusive, ReasonSetupError
+				report.ActionableError = "test runner did not report an ordinary test failure"
+				return
+			}
+			if missingSites {
+				report.Verdict, report.Reason = VerdictInconclusive, ReasonNoRecognizedAssertion
+				report.ActionableError = unsupportedAssertions(selector)
+				return
+			}
+			failure, ok := sites.matchFailure(caseDiagnostic(tc.Output, treePath), expected)
+			if !ok || (attempt > 0 && previousOutcome == runner.OutcomeFail && failure != firstFailure) {
+				report.Verdict, report.Reason = VerdictInconclusive, ReasonUnexpectedFailureSignal
+				report.ActionableError = fmt.Sprintf("selected case did not reproduce the expected assertion and diagnostic on broken run %d", attempt+1)
+				return
+			}
+			if attempt == 0 {
+				firstFailure = failure
+			}
+		case runner.OutcomePass:
+			if run.ExitCode != 0 {
+				report.Verdict, report.Reason = VerdictInconclusive, ReasonSetupError
+				report.ActionableError = "broken runner failed outside the selected case"
+				return
+			}
+		default:
+			report.Verdict, report.Reason = VerdictInconclusive, ReasonSetupError
+			report.ActionableError = "selected test errored on the broken tree"
+			return
+		}
+		if missingSites {
+			report.Verdict, report.Reason = VerdictInconclusive, ReasonNoRecognizedAssertion
+			report.ActionableError = unsupportedAssertions(selector)
+			return
+		}
+		if attempt > 0 && tc.Outcome != previousOutcome {
+			report.Verdict, report.Reason = VerdictInconclusive, ReasonFlaky
+			report.ActionableError = "selected case produced inconsistent broken outcomes"
+			return
+		}
+		previousOutcome = tc.Outcome
+	}
+	if previousOutcome == runner.OutcomePass {
+		report.Verdict, report.Reason = VerdictRefuted, ReasonPassedOnBroken
+		report.ActionableError = "selected test passed on the broken tree"
+		return
+	}
+	report.ObservedSignal = trimOneLine(firstFailure.diagnostic)
+	report.Verdict = VerdictVerified
+}
+
+func runBrokenTest(ctx context.Context, repoRoot string, spec CandidateSpec, report VerificationReport, changes []gitutil.FileChange, classifier Classifier, pkgs []string, selector string, timeout time.Duration) (runner.TestRunResult, string, error) {
+	var empty runner.TestRunResult
+	wt, err := gitutil.CreateWorktree(ctx, repoRoot, report.FixedRef, "prove-test-broken-")
+	if err != nil {
+		return empty, "", err
+	}
+	defer wt.Cleanup(ctx)
+	if err := applyCandidateToWorktree(ctx, wt, spec); err != nil {
+		return empty, "", err
+	}
+	reverted := false
 	for _, ch := range changes {
 		if classifier.Classify(ch.Path) != ClassProduct {
 			continue
 		}
-		revertedProduct++
-		switch ch.Status {
-		case "A":
-			// Delete product files introduced by the fix (prevents false "does not protect" or leftover symbols).
-			if err := wt.RemoveFile(ch.Path); err != nil {
-				report.Verdict = VerdictInconclusive
-				report.Reason = ReasonSetupError
-				report.ActionableError = fmt.Sprintf("remove added product file %s: %v", ch.Path, err)
-				return
+		reverted = true
+		path := ch.Path
+		if ch.Status == "A" || ch.Status == "R" {
+			if err := wt.RemoveFile(path); err != nil {
+				return empty, "", err
 			}
-		case "R":
-			if err := wt.RemoveFile(ch.Path); err != nil {
-				report.Verdict = VerdictInconclusive
-				report.Reason = ReasonSetupError
-				report.ActionableError = fmt.Sprintf("remove renamed product file %s: %v", ch.Path, err)
-				return
+			if ch.Status == "A" {
+				continue
 			}
-			oldBytes, err := gitutil.FileAtRef(ctx, repoRoot, report.BrokenRef, ch.OldPath)
-			if err != nil {
-				report.Verdict = VerdictInconclusive
-				report.Reason = ReasonSetupError
-				report.ActionableError = fmt.Sprintf("restore renamed product file %s: %v", ch.OldPath, err)
-				return
-			}
-			if err := wt.WriteFile(ch.OldPath, oldBytes); err != nil {
-				report.Verdict = VerdictInconclusive
-				report.Reason = ReasonSetupError
-				report.ActionableError = fmt.Sprintf("write restored product file %s: %v", ch.OldPath, err)
-				return
-			}
-		default: // M, D
-			oldBytes, err := gitutil.FileAtRef(ctx, repoRoot, report.BrokenRef, ch.Path)
-			if err != nil {
-				report.Verdict = VerdictInconclusive
-				report.Reason = ReasonSetupError
-				report.ActionableError = fmt.Sprintf("restore product file %s from broken ref: %v", ch.Path, err)
-				return
-			}
-			if err := wt.WriteFile(ch.Path, oldBytes); err != nil {
-				report.Verdict = VerdictInconclusive
-				report.Reason = ReasonSetupError
-				report.ActionableError = fmt.Sprintf("write restored product file %s: %v", ch.Path, err)
-				return
-			}
+			path = ch.OldPath
+		}
+		content, err := gitutil.FileAtRef(ctx, repoRoot, report.BrokenRef, path)
+		if err != nil {
+			return empty, "", err
+		}
+		if err := wt.WriteFile(path, content); err != nil {
+			return empty, "", err
 		}
 	}
+	if !reverted {
+		return empty, "", fmt.Errorf("no product change separates the broken and fixed trees")
+	}
+	res, err := runTestRunner(ctx, repoRoot, wt.Path, spec.Artifact.Tool, pkgs, selector, timeout)
+	return res, wt.Path, err
+}
 
-	if revertedProduct == 0 {
-		report.Verdict = VerdictInconclusive
-		report.Reason = ReasonSetupError
-		report.ActionableError = "no product files changed between broken_ref and fixed_ref; cannot separate test from fix"
-		return
+func caseIdentity(tc runner.TestCaseResult, treePath string) string {
+	pkg := tc.Package
+	if filepath.IsAbs(pkg) {
+		if rel, err := filepath.Rel(treePath, pkg); err == nil {
+			pkg = filepath.ToSlash(rel)
+		}
 	}
+	return pkg + "::" + normalizeSelectorForCompare(tc.Name)
+}
 
-	// 3. Run the EXACT SAME selector TWICE on the broken tree (§5.2).
-	var brokenRuns [2]runner.TestRunResult
-	for i := 0; i < 2; i++ {
-		r, runErr := runTestRunner(ctx, wt.Path, spec.Artifact.Tool, pkgs, selector, timeout)
-		if runErr != nil {
-			report.Verdict = VerdictInconclusive
-			report.Reason = ReasonSetupError
-			report.ActionableError = fmt.Sprintf("run test attempt %d on broken tree: %v", i+1, runErr)
-			return
+func caseDiagnostic(output, treePath string) string {
+	output = terminalEscape.ReplaceAllString(output, "")
+	output = strings.ReplaceAll(output, treePath, "<tree>")
+	output = strings.ReplaceAll(output, filepath.ToSlash(treePath), "<tree>")
+	var evidence []string
+	for _, line := range strings.Split(output, "\n") {
+		line = strings.TrimSpace(line)
+		// go-cmp varies the spacing after a diff prefix between processes.
+		if strings.HasPrefix(line, "+\u00a0") || strings.HasPrefix(line, "-\u00a0") {
+			line = line[:1] + " " + strings.TrimPrefix(line[1:], "\u00a0")
 		}
-		brokenRuns[i] = r
-		report.BrokenRuntimeMS += r.DurationMS
-		if r.TimedOut {
-			report.Verdict = VerdictInconclusive
-			report.Reason = ReasonTimeout
-			report.ActionableError = fmt.Sprintf("test timed out on broken tree (attempt %d)", i+1)
-			return
-		}
-		if r.CompileOnly {
-			report.Verdict = VerdictInconclusive
-			report.Reason = ReasonCompileOnly
-			report.ObservedSignal = trimOneLine(r.BuildOutput)
-			report.ActionableError = "test only fails because the broken tree does not compile/import (uses API introduced by the fix); reach the fix through an API that already existed"
-			return
+		if line != "" && !strings.HasPrefix(line, "=== ") && !strings.HasPrefix(line, "--- ") {
+			evidence = append(evidence, line)
 		}
 	}
-
-	outcomes := [2]runner.TestOutcome{}
-	var failOutput string
-	for i := 0; i < 2; i++ {
-		matched := matchTestCases(brokenRuns[i].Cases, selector)
-		if len(matched) == 0 {
-			report.Verdict = VerdictInconclusive
-			report.Reason = ReasonSelectorNotExecuted
-			report.ActionableError = fmt.Sprintf("selector %q did not execute on broken tree (attempt %d)", selector, i+1)
-			return
-		}
-		state := aggregateCaseOutcome(matched)
-		if state == runner.OutcomeSkip {
-			report.Verdict = VerdictInconclusive
-			report.Reason = ReasonSkippedOnBroken
-			report.ActionableError = "candidate test was skipped on the broken tree; skip->pass never proves protection"
-			return
-		}
-		if state == runner.OutcomeError {
-			report.Verdict = VerdictInconclusive
-			report.Reason = ReasonSetupError
-			report.ActionableError = "candidate test encountered a setup error on the broken tree"
-			return
-		}
-		outcomes[i] = state
-		if state == runner.OutcomeFail && failOutput == "" {
-			for _, tc := range matched {
-				if tc.Outcome == runner.OutcomeFail {
-					failOutput = tc.Output
-					break
-				}
-			}
-		}
-	}
-
-	if outcomes[0] != outcomes[1] {
-		report.Verdict = VerdictInconclusive
-		report.Reason = ReasonFlaky
-		report.ActionableError = fmt.Sprintf("contradictory runs on broken tree: run 1=%s, run 2=%s", outcomes[0], outcomes[1])
-		return
-	}
-	if outcomes[0] == runner.OutcomePass {
-		report.Verdict = VerdictRefuted
-		report.Reason = ReasonPassedOnBroken
-		report.ActionableError = "candidate test passed on the broken tree and therefore does not protect the fix"
-		return
-	}
-
-	report.ObservedSignal = trimOneLine(failOutput)
-	if spec.Artifact.ExpectedSignal != "" && !matchesExpectedSignal(failOutput+"\n"+brokenRuns[0].RawOutput, spec.Artifact.ExpectedSignal) {
-		report.Verdict = VerdictInconclusive
-		report.Reason = ReasonUnexpectedFailureSignal
-		report.ActionableError = fmt.Sprintf("broken tree failed, but output did not match expected_signal %q", spec.Artifact.ExpectedSignal)
-		return
-	}
-
-	report.Verdict = VerdictVerified
+	return strings.Join(evidence, "\n")
 }
 
 func verifyLintOrStructure(ctx context.Context, repoRoot string, r reflex.Reflex, spec CandidateSpec, report *VerificationReport, timeout time.Duration) {
+	if r.Artifact.Rule == "" && r.Artifact.Selector == "" {
+		if r.Artifact.Tool != "go-build" {
+			report.Verdict, report.Reason = VerdictInconclusive, ReasonMissingSelector
+			report.ActionableError = "static proof requires an identifiable diagnostic rule or selector"
+			return
+		}
+		r.Artifact.Selector = "go-build"
+	}
 	changes, err := gitutil.DiffFileChanges(ctx, repoRoot, report.BrokenRef, report.FixedRef)
 	if err != nil {
 		report.Verdict = VerdictInconclusive
@@ -401,7 +466,6 @@ func verifyLintOrStructure(ctx context.Context, repoRoot string, r reflex.Reflex
 	}
 
 	brokenTargets := collectBrokenTargetFiles(r, changes)
-	fixedTargets := collectFixedTargetFiles(r, changes)
 
 	brokenRun, err := runner.RunArtifact(ctx, brokenWT.Path, spec.Artifact, brokenTargets, timeout)
 	if err != nil {
@@ -434,7 +498,11 @@ func verifyLintOrStructure(ctx context.Context, repoRoot string, r reflex.Reflex
 		report.ActionableError = "tool timed out on fixed tree"
 		return
 	}
-	_ = fixedTargets
+	if !staticRunComplete(spec.Artifact.Tool, brokenRun) || !staticRunComplete(spec.Artifact.Tool, fixedRun) {
+		report.Verdict, report.Reason = VerdictInconclusive, ReasonSetupError
+		report.ActionableError = "static analyzer did not produce a completed analysis on both trees"
+		return
+	}
 
 	brokenFiltered := filterFindingsForReflex(r, brokenRun.Findings)
 	fixedFiltered := filterFindingsForReflex(r, fixedRun.Findings)
@@ -466,7 +534,7 @@ func verifyLintOrStructure(ctx context.Context, repoRoot string, r reflex.Reflex
 				break
 			}
 		}
-		if !matchedSignal && !matchesExpectedSignal(brokenRun.Stdout+"\n"+brokenRun.Stderr, spec.Artifact.ExpectedSignal) {
+		if !matchedSignal {
 			report.Verdict = VerdictInconclusive
 			report.Reason = ReasonUnexpectedFailureSignal
 			report.ActionableError = fmt.Sprintf("broken finding did not match expected_signal %q", spec.Artifact.ExpectedSignal)
@@ -482,8 +550,14 @@ func verifyLintOrStructure(ctx context.Context, repoRoot string, r reflex.Reflex
 		return
 	}
 
-	// Verify every allowed near-miss case materialized at its in-scope product path (§4, §5.2).
-	if !verifyAllowedCases(ctx, repoRoot, fixedWT, r, spec, fixedFiltered, report, timeout) {
+	// Verify every allowed near-miss case materialized at its in-scope product path (D4, P4).
+	if len(spec.AllowedCases) == 0 {
+		report.Verdict = VerdictInconclusive
+		report.Reason = ReasonMissingAllowedCase
+		report.ActionableError = "lint/structure proof requires at least one in-scope allowed neighbor case (D4)"
+		return
+	}
+	if !verifyAllowedCases(ctx, fixedWT, r, spec, fixedFiltered, report, timeout) {
 		return
 	}
 
@@ -491,63 +565,55 @@ func verifyLintOrStructure(ctx context.Context, repoRoot string, r reflex.Reflex
 }
 
 func verifyGuard(ctx context.Context, repoRoot string, r reflex.Reflex, spec CandidateSpec, report *VerificationReport, timeout time.Duration) {
-	brokenWT, err := gitutil.CreateWorktree(ctx, repoRoot, report.BrokenRef, "prove-guard-broken-")
-	if err != nil {
-		report.Verdict = VerdictInconclusive
-		report.Reason = ReasonSetupError
-		report.ActionableError = fmt.Sprintf("create broken worktree: %v", err)
+	if len(spec.AllowedCases) == 0 {
+		report.Verdict, report.Reason = VerdictInconclusive, ReasonMissingAllowedCase
+		report.ActionableError = "guard proof requires an executed allowed case"
 		return
 	}
-	defer brokenWT.Cleanup(ctx)
-
+	if strings.TrimSpace(spec.Artifact.ExpectedSignal) == "" {
+		report.Verdict, report.Reason = VerdictInconclusive, ReasonUnexpectedFailureSignal
+		report.ActionableError = "guard proof requires its recognizable failure signal"
+		return
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		brokenRun, err := runBrokenGuard(ctx, repoRoot, spec, report.BrokenRef, timeout)
+		if err != nil {
+			report.Verdict, report.Reason = VerdictInconclusive, ReasonSetupError
+			report.ActionableError = err.Error()
+			return
+		}
+		report.BrokenRuntimeMS += brokenRun.DurationMS
+		if brokenRun.TimedOut {
+			report.Verdict, report.Reason = VerdictInconclusive, ReasonTimeout
+			report.ActionableError = "guard timed out on the broken tree"
+			return
+		}
+		if brokenRun.ExitCode == 0 {
+			report.Verdict, report.Reason = VerdictRefuted, ReasonPassedOnBroken
+			if attempt > 0 {
+				report.Verdict, report.Reason = VerdictInconclusive, ReasonFlaky
+			}
+			report.ActionableError = "guard succeeded on the broken tree"
+			return
+		}
+		output := brokenRun.Stdout + "\n" + brokenRun.Stderr
+		if !matchesExpectedSignal(output, spec.Artifact.ExpectedSignal) {
+			report.Verdict, report.Reason = VerdictInconclusive, ReasonUnexpectedFailureSignal
+			report.ActionableError = fmt.Sprintf("broken guard run %d did not emit its expected signal", attempt+1)
+			return
+		}
+		report.ObservedSignal = trimOneLine(output)
+	}
 	fixedWT, err := gitutil.CreateWorktree(ctx, repoRoot, report.FixedRef, "prove-guard-fixed-")
 	if err != nil {
-		report.Verdict = VerdictInconclusive
-		report.Reason = ReasonSetupError
-		report.ActionableError = fmt.Sprintf("create fixed worktree: %v", err)
+		report.Verdict, report.Reason = VerdictInconclusive, ReasonSetupError
+		report.ActionableError = err.Error()
 		return
 	}
 	defer fixedWT.Cleanup(ctx)
-
-	if err := applyCandidateToWorktree(ctx, brokenWT, spec); err != nil {
-		report.Verdict = VerdictInconclusive
-		report.Reason = ReasonSetupError
-		report.ActionableError = fmt.Sprintf("apply candidate to broken tree: %v", err)
-		return
-	}
 	if err := applyCandidateToWorktree(ctx, fixedWT, spec); err != nil {
-		report.Verdict = VerdictInconclusive
-		report.Reason = ReasonSetupError
-		report.ActionableError = fmt.Sprintf("apply candidate to fixed tree: %v", err)
-		return
-	}
-
-	brokenRun, err := runner.RunArtifact(ctx, brokenWT.Path, spec.Artifact, nil, timeout)
-	if err != nil {
-		report.Verdict = VerdictInconclusive
-		report.Reason = ReasonSetupError
-		report.ActionableError = fmt.Sprintf("run guard on broken tree: %v", err)
-		return
-	}
-	report.BrokenRuntimeMS = brokenRun.DurationMS
-	if brokenRun.TimedOut {
-		report.Verdict = VerdictInconclusive
-		report.Reason = ReasonTimeout
-		report.ActionableError = "guard timed out on broken tree"
-		return
-	}
-	if brokenRun.ExitCode == 0 && len(filterFindingsForReflex(r, brokenRun.Findings)) == 0 {
-		report.Verdict = VerdictRefuted
-		report.Reason = ReasonPassedOnBroken
-		report.ActionableError = "guard command succeeded on broken tree without flagging the error"
-		return
-	}
-	combinedBroken := brokenRun.Stdout + "\n" + brokenRun.Stderr
-	report.ObservedSignal = trimOneLine(combinedBroken)
-	if spec.Artifact.ExpectedSignal != "" && !matchesExpectedSignal(combinedBroken, spec.Artifact.ExpectedSignal) {
-		report.Verdict = VerdictInconclusive
-		report.Reason = ReasonUnexpectedFailureSignal
-		report.ActionableError = fmt.Sprintf("guard failed on broken tree, but output did not match expected_signal %q", spec.Artifact.ExpectedSignal)
+		report.Verdict, report.Reason = VerdictInconclusive, ReasonSetupError
+		report.ActionableError = err.Error()
 		return
 	}
 
@@ -566,6 +632,11 @@ func verifyGuard(ctx context.Context, repoRoot string, r reflex.Reflex, spec Can
 		return
 	}
 	fixedFiltered := filterFindingsForReflex(r, fixedRun.Findings)
+	if fixedRun.ExitCode != 0 && !matchesExpectedSignal(fixedRun.Stdout+"\n"+fixedRun.Stderr, spec.Artifact.ExpectedSignal) {
+		report.Verdict, report.Reason = VerdictInconclusive, ReasonSetupError
+		report.ActionableError = "guard exited unsuccessfully on the fixed tree for an unrelated reason"
+		return
+	}
 	if fixedRun.ExitCode != 0 || len(fixedFiltered) > 0 {
 		report.Verdict = VerdictRefuted
 		report.Reason = ReasonFailedOnFixed
@@ -573,16 +644,41 @@ func verifyGuard(ctx context.Context, repoRoot string, r reflex.Reflex, spec Can
 		return
 	}
 
-	if !verifyAllowedCases(ctx, repoRoot, fixedWT, r, spec, fixedFiltered, report, timeout) {
+	if !verifyAllowedCases(ctx, fixedWT, r, spec, fixedFiltered, report, timeout) {
 		return
 	}
 
 	report.Verdict = VerdictVerified
 }
 
+func runBrokenGuard(ctx context.Context, repoRoot string, spec CandidateSpec, brokenRef string, timeout time.Duration) (runner.LintRunResult, error) {
+	wt, err := gitutil.CreateWorktree(ctx, repoRoot, brokenRef, "prove-guard-broken-")
+	if err != nil {
+		return runner.LintRunResult{}, err
+	}
+	defer wt.Cleanup(ctx)
+	if err := applyCandidateToWorktree(ctx, wt, spec); err != nil {
+		return runner.LintRunResult{}, err
+	}
+	return runner.RunArtifact(ctx, wt.Path, spec.Artifact, nil, timeout)
+}
+
+// A diagnostic exit with findings is valid analysis. A usage/configuration failure is not.
+func staticRunComplete(tool string, result runner.LintRunResult) bool {
+	if result.TimedOut || result.ExitCode < 0 {
+		return false
+	}
+	switch tool {
+	case "ruff", "eslint", "golangci-lint":
+		if !json.Valid([]byte(result.Stdout)) {
+			return false
+		}
+	}
+	return result.ExitCode == 0 || (result.ExitCode == 1 && len(result.Findings) > 0)
+}
+
 func verifyAllowedCases(
 	ctx context.Context,
-	repoRoot string,
 	fixedWT *gitutil.Worktree,
 	r reflex.Reflex,
 	spec CandidateSpec,
@@ -609,21 +705,10 @@ func verifyAllowedCases(
 		}
 
 		content := []byte(ac.Content)
-		if len(content) == 0 && ac.SourceFile != "" {
-			src := ac.SourceFile
-			if !filepath.IsAbs(src) {
-				src = filepath.Join(repoRoot, filepath.FromSlash(src))
-			}
-			var err error
-			content, err = os.ReadFile(src)
-			if err != nil {
-				acr.Detail = fmt.Sprintf("read allowed case fixture %s: %v", ac.SourceFile, err)
-				report.AllowedResults = append(report.AllowedResults, acr)
-				report.Verdict = VerdictInconclusive
-				report.Reason = ReasonSetupError
-				report.ActionableError = acr.Detail
-				return false
-			}
+		if ac.TargetPath == "" || len(bytes.TrimSpace(content)) == 0 {
+			report.Verdict, report.Reason = VerdictInconclusive, ReasonMissingAllowedCase
+			report.ActionableError = "an allowed case needs an in-scope target and fixture contents"
+			return false
 		}
 
 		absTarget := filepath.Join(fixedWT.Path, filepath.FromSlash(target))
@@ -661,6 +746,21 @@ func verifyAllowedCases(
 			return false
 		}
 
+		if runRes.TimedOut {
+			report.Verdict, report.Reason = VerdictInconclusive, ReasonTimeout
+			report.ActionableError = "the allowed case timed out"
+			return false
+		}
+		if r.EffectiveRung() == reflex.RungGuard && runRes.ExitCode != 0 && !matchesExpectedSignal(runRes.Stdout+"\n"+runRes.Stderr, spec.Artifact.ExpectedSignal) {
+			report.Verdict, report.Reason = VerdictInconclusive, ReasonSetupError
+			report.ActionableError = "the guard failed on the allowed case for an unrelated reason"
+			return false
+		}
+		if r.EffectiveRung() != reflex.RungGuard && !staticRunComplete(spec.Artifact.Tool, runRes) {
+			report.Verdict, report.Reason = VerdictInconclusive, ReasonSetupError
+			report.ActionableError = "the analyzer did not complete on the allowed case"
+			return false
+		}
 		filtered := filterFindingsForReflex(r, runRes.Findings)
 		var flagged []finding.Finding
 		if len(targets) > 0 {
@@ -700,7 +800,10 @@ func applyCandidateToWorktree(ctx context.Context, wt *gitutil.Worktree, spec Ca
 		}
 	}
 	for rel, content := range spec.OverlayFiles {
-		abs := filepath.Join(wt.Path, filepath.FromSlash(rel))
+		abs, err := gitutil.LocalPath(wt.Path, rel)
+		if err != nil {
+			return err
+		}
 		existing, err := os.ReadFile(abs)
 		if err == nil && bytes.Equal(existing, []byte(content)) {
 			continue
@@ -729,6 +832,11 @@ func inferTestTargets(spec CandidateSpec, changes []gitutil.FileChange) []string
 				seen[pkg] = true
 				targets = append(targets, pkg)
 			}
+		} else if (spec.Artifact.Tool == "vitest" || spec.Artifact.Tool == "jest") && isTestFile(ch.Path) {
+			if !seen[ch.Path] {
+				seen[ch.Path] = true
+				targets = append(targets, ch.Path)
+			}
 		} else if spec.Artifact.Tool == "pytest" && (strings.HasSuffix(ch.Path, ".py") && isTestFile(ch.Path)) {
 			if !seen[ch.Path] {
 				seen[ch.Path] = true
@@ -736,7 +844,7 @@ func inferTestTargets(spec CandidateSpec, changes []gitutil.FileChange) []string
 			}
 		}
 	}
-	if len(targets) == 0 && spec.Artifact.Path != "" {
+	if spec.Artifact.Path != "" {
 		if spec.Artifact.Tool == "go-test" {
 			dir := filepath.ToSlash(filepath.Dir(spec.Artifact.Path))
 			if dir == "." || dir == "" {
@@ -752,37 +860,209 @@ func inferTestTargets(spec CandidateSpec, changes []gitutil.FileChange) []string
 	return targets
 }
 
-func runTestRunner(ctx context.Context, dir, tool string, targets []string, selector string, timeout time.Duration) (runner.TestRunResult, error) {
+func collectTestNeighbors(spec CandidateSpec) []AllowedCase {
+	var out []AllowedCase
+	if sel := strings.TrimSpace(spec.NeighborSelector); sel != "" {
+		out = append(out, AllowedCase{Name: sel, Selector: sel})
+	}
+	for _, ac := range spec.AllowedCases {
+		if strings.TrimSpace(ac.Selector) != "" {
+			if ac.Name == "" {
+				ac.Name = ac.Selector
+			}
+			out = append(out, ac)
+		}
+	}
+	return out
+}
+
+func verifyTestNeighbors(
+	ctx context.Context,
+	repoRoot string,
+	fixedWT *gitutil.Worktree,
+	spec CandidateSpec,
+	pkgs []string,
+	neighbors []AllowedCase,
+	fixedID string,
+	report *VerificationReport,
+	timeout time.Duration,
+) bool {
+	for _, nb := range neighbors {
+		nbSel := strings.TrimSpace(nb.Selector)
+		acr := AllowedCaseResult{
+			Name:       nb.Name,
+			TargetPath: nb.TargetPath,
+			InScope:    true,
+		}
+
+		// Optional materialized test file overlay for the neighbor.
+		var restoreTarget string
+		var origBytes []byte
+		hadOrig := false
+		if nb.TargetPath != "" && nb.Content != "" {
+			target := filepath.ToSlash(strings.TrimPrefix(filepath.Clean(nb.TargetPath), "./"))
+			acr.TargetPath = target
+			content := []byte(nb.Content)
+			absTarget := filepath.Join(fixedWT.Path, filepath.FromSlash(target))
+			if b, err := os.ReadFile(absTarget); err == nil {
+				origBytes = b
+				hadOrig = true
+			}
+			restoreTarget = target
+			if err := fixedWT.WriteFile(target, content); err != nil {
+				acr.Detail = fmt.Sprintf("write neighbor fixture %s: %v", target, err)
+				report.AllowedResults = append(report.AllowedResults, acr)
+				report.Verdict = VerdictInconclusive
+				report.Reason = ReasonSetupError
+				report.ActionableError = acr.Detail
+				return false
+			}
+		}
+
+		nRun, nErr := runTestRunner(ctx, repoRoot, fixedWT.Path, spec.Artifact.Tool, pkgs, nbSel, timeout)
+		if restoreTarget != "" {
+			if hadOrig {
+				_ = fixedWT.WriteFile(restoreTarget, origBytes)
+			} else {
+				_ = fixedWT.RemoveFile(restoreTarget)
+			}
+		}
+		if nErr != nil {
+			acr.Detail = fmt.Sprintf("run neighbor test %q: %v", nbSel, nErr)
+			report.AllowedResults = append(report.AllowedResults, acr)
+			report.Verdict = VerdictInconclusive
+			report.Reason = ReasonSetupError
+			report.ActionableError = acr.Detail
+			return false
+		}
+		if nRun.TimedOut {
+			acr.Detail = fmt.Sprintf("neighbor test %q timed out", nbSel)
+			report.AllowedResults = append(report.AllowedResults, acr)
+			report.Verdict = VerdictInconclusive
+			report.Reason = ReasonTimeout
+			report.ActionableError = acr.Detail
+			return false
+		}
+		if nRun.CompileOnly {
+			acr.Detail = fmt.Sprintf("neighbor test %q failed to compile/collect: %s", nbSel, trimOneLine(nRun.BuildOutput))
+			report.AllowedResults = append(report.AllowedResults, acr)
+			report.Verdict = VerdictInconclusive
+			report.Reason = ReasonFixedCompileError
+			report.ActionableError = acr.Detail
+			return false
+		}
+		matched := matchTestCases(nRun.Cases, nbSel)
+		if len(matched) == 0 {
+			acr.Detail = fmt.Sprintf("neighbor selector %q did not execute any matching test case on fixed tree", nbSel)
+			report.AllowedResults = append(report.AllowedResults, acr)
+			report.Verdict = VerdictInconclusive
+			report.Reason = ReasonNeighborNotExecuted
+			report.ActionableError = acr.Detail
+			return false
+		}
+		if len(matched) != 1 || caseIdentity(matched[0], fixedWT.Path) == fixedID {
+			report.Verdict, report.Reason = VerdictInconclusive, ReasonNeighborNotExecuted
+			report.ActionableError = "neighbor selector must identify a unique test case"
+			return false
+		}
+		for _, tc := range matched {
+			switch tc.Outcome {
+			case runner.OutcomeSkip:
+				acr.Detail = fmt.Sprintf("neighbor test %q was skipped; skipped neighbors never satisfy proof (D4)", tc.Name)
+				report.AllowedResults = append(report.AllowedResults, acr)
+				report.Verdict = VerdictInconclusive
+				report.Reason = ReasonNeighborSkipped
+				report.ActionableError = acr.Detail
+				return false
+			case runner.OutcomeFail:
+				acr.Detail = fmt.Sprintf("legitimate neighbor test %q failed on fixed tree: %s", tc.Name, trimOneLine(tc.Output))
+				report.AllowedResults = append(report.AllowedResults, acr)
+				report.Verdict = VerdictRefuted
+				report.Reason = ReasonNeighborFailed
+				report.ActionableError = acr.Detail
+				return false
+			case runner.OutcomeError:
+				acr.Detail = fmt.Sprintf("neighbor test %q errored on fixed tree: %s", tc.Name, trimOneLine(tc.Output))
+				report.AllowedResults = append(report.AllowedResults, acr)
+				report.Verdict = VerdictInconclusive
+				report.Reason = ReasonSetupError
+				report.ActionableError = acr.Detail
+				return false
+			}
+		}
+		if nRun.ExitCode != 0 {
+			report.Verdict, report.Reason = VerdictInconclusive, ReasonSetupError
+			report.ActionableError = "neighbor runner did not complete successfully"
+			return false
+		}
+		acr.Passed = true
+		report.AllowedResults = append(report.AllowedResults, acr)
+	}
+	return true
+}
+
+func runTestRunner(ctx context.Context, repoRoot, dir, tool string, targets []string, selector string, timeout time.Duration) (runner.TestRunResult, error) {
 	switch tool {
 	case "go-test", "go":
 		return runner.RunGoTest(ctx, dir, targets, selector, timeout)
 	case "pytest":
 		return runner.RunPytest(ctx, dir, targets, selector, timeout)
+	case "vitest":
+		return runner.RunVitest(ctx, repoRoot, dir, targets, selector, timeout)
+	case "jest":
+		return runner.RunJest(ctx, repoRoot, dir, targets, selector, timeout)
 	default:
 		return runner.TestRunResult{}, fmt.Errorf("unsupported test runner %q", tool)
 	}
 }
 
+// SelectedCases selects the exact test identity used by proof and later enforcement.
+// Callers expecting a single case must reject ambiguous matches.
+func SelectedCases(cases []runner.TestCaseResult, selector string) []runner.TestCaseResult {
+	return matchTestCases(cases, selector)
+}
+
+// matchTestCases requires a non-empty selector and performs strict normalized exact matching (D4, D9).
+// An empty selector never matches any test case.
 func matchTestCases(cases []runner.TestCaseResult, selector string) []runner.TestCaseResult {
 	sel := strings.TrimSpace(selector)
 	if sel == "" {
-		return cases
+		return nil
 	}
-	normSel := normalizePytestSelector(sel)
+	normSel := normalizeSelectorForCompare(sel)
+	spaceSel := strings.ReplaceAll(normSel, " › ", " ")
 	var exact []runner.TestCaseResult
-	var prefix []runner.TestCaseResult
 	for _, c := range cases {
-		normCase := normalizePytestSelector(c.Name)
-		if c.Name == sel || normCase == normSel || strings.HasSuffix(c.Name, "::"+sel) {
+		normCase := normalizeSelectorForCompare(c.Name)
+		spaceCase := strings.ReplaceAll(normCase, " › ", " ")
+		if c.Name == sel || normCase == normSel || spaceCase == spaceSel {
 			exact = append(exact, c)
-		} else if strings.HasPrefix(c.Name, sel+"/") || strings.HasPrefix(normCase, normSel+"[") || strings.Contains(normCase, normSel) {
-			prefix = append(prefix, c)
+			continue
+		}
+		// Allow plain pytest function name without module prefix only when selector has no "::".
+		if !strings.Contains(sel, "::") && strings.HasSuffix(c.Name, "::"+sel) {
+			exact = append(exact, c)
 		}
 	}
-	if len(exact) > 0 {
-		return exact
+	return exact
+}
+
+// normalizeSelectorForCompare aligns Go, pytest, and Vitest/Jest full test names for exact comparison.
+func normalizeSelectorForCompare(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.Contains(s, "::") {
+		return normalizePytestSelector(s)
 	}
-	return prefix
+	// Normalize Vitest/Jest ancestor separators (" › ", " > ") and Vitest 3.x quoted $var titles.
+	if strings.Contains(s, " › ") || strings.Contains(s, " > ") {
+		s = strings.ReplaceAll(s, " > ", " › ")
+		parts := strings.Split(s, " › ")
+		for i := range parts {
+			parts[i] = strings.Trim(strings.Join(strings.Fields(parts[i]), " "), "'")
+		}
+		return strings.Join(parts, " › ")
+	}
+	return strings.Trim(s, "'")
 }
 
 // normalizePytestSelector aligns pytest CLI node IDs (e.g. "pkg/test_calc.py::TestA::test_fn")
@@ -803,32 +1083,6 @@ func normalizePytestSelector(s string) string {
 	return prefix + "::" + parts[len(parts)-1]
 }
 
-func aggregateCaseOutcome(cases []runner.TestCaseResult) runner.TestOutcome {
-	hasFail := false
-	hasSkip := false
-	hasError := false
-	for _, c := range cases {
-		switch c.Outcome {
-		case runner.OutcomeFail:
-			hasFail = true
-		case runner.OutcomeSkip:
-			hasSkip = true
-		case runner.OutcomeError:
-			hasError = true
-		}
-	}
-	if hasError {
-		return runner.OutcomeError
-	}
-	if hasSkip {
-		return runner.OutcomeSkip
-	}
-	if hasFail {
-		return runner.OutcomeFail
-	}
-	return runner.OutcomePass
-}
-
 func collectBrokenTargetFiles(r reflex.Reflex, changes []gitutil.FileChange) []string {
 	var out []string
 	for _, ch := range changes {
@@ -841,19 +1095,6 @@ func collectBrokenTargetFiles(r reflex.Reflex, changes []gitutil.FileChange) []s
 		}
 		if r.MatchesPath(p) {
 			out = append(out, p)
-		}
-	}
-	return out
-}
-
-func collectFixedTargetFiles(r reflex.Reflex, changes []gitutil.FileChange) []string {
-	var out []string
-	for _, ch := range changes {
-		if ch.Status == "D" {
-			continue
-		}
-		if r.MatchesPath(ch.Path) {
-			out = append(out, ch.Path)
 		}
 	}
 	return out
@@ -900,6 +1141,3 @@ func trimOneLine(s string) string {
 	}
 	return ""
 }
-
-// Unused import guard for errors.
-var _ = errors.New
