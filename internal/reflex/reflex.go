@@ -1,6 +1,8 @@
 package reflex
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,12 +13,14 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/angelnicolasc/flinch/internal/gitutil"
 	"github.com/bmatcuk/doublestar/v4"
 	"gopkg.in/yaml.v3"
 )
 
 const (
-	ReflexesRelDir  = ".flinch/reflexes"
+	ReflexesRelDir  = ".flinch/checks"
+	LegacyRelDir    = ".flinch/reflexes"
 	CasesRelDir     = ".flinch/cases"
 	RejectedRelPath = ".flinch/rejected.yml"
 )
@@ -67,7 +71,7 @@ func (s StringList) MarshalYAML() (any, error) {
 	return []string(s), nil
 }
 
-// Reflex represents a reviewed protection record stored under .flinch/reflexes/<id>.yml.
+// Reflex represents a reviewed protection record stored under .flinch/checks/<id>.yml.
 // Surfaces expresses reviewed intent only; observed activation state is stored separately
 // in activation evidence bound to an integrated SHA.
 type Reflex struct {
@@ -194,6 +198,9 @@ func (r Reflex) MatchesPath(relPath string) bool {
 	if strings.TrimSpace(r.Scope) == "" {
 		return true
 	}
+	if ok, _ := doublestar.Match(r.Scope, clean); ok {
+		return true
+	}
 	ok, err := doublestar.Match(filepath.ToSlash(r.Scope), clean)
 	return err == nil && ok
 }
@@ -211,8 +218,8 @@ func (r Reflex) ExpectedID() string {
 
 // Validate checks required fields and allowed values.
 func (r Reflex) Validate() error {
-	if strings.TrimSpace(r.ID) == "" {
-		return fmt.Errorf("reflex id is required")
+	if !filepath.IsLocal(r.ID) || r.ID == "." || strings.ContainsAny(r.ID, `/\:`) || strings.HasSuffix(r.ID, ".") || strings.TrimSpace(r.ID) != r.ID {
+		return fmt.Errorf("invalid check ID %q", r.ID)
 	}
 	if r.Version < 1 {
 		return fmt.Errorf("reflex %q version must be >= 1, got %d", r.ID, r.Version)
@@ -222,6 +229,17 @@ func (r Reflex) Validate() error {
 	}
 	if strings.TrimSpace(r.Artifact.Tool) == "" {
 		return fmt.Errorf("reflex %q artifact.tool is required", r.ID)
+	}
+	paths := []string{r.Artifact.Path, r.Cases.TargetPath, r.Cases.Broken, r.Cases.Fixed}
+	if r.EffectiveRung() != RungTest {
+		paths = append(paths, r.Cases.Allowed...)
+	}
+	for _, path := range paths {
+		if path != "" {
+			if _, err := gitutil.LocalPath(".", path); err != nil {
+				return fmt.Errorf("invalid path in check %q: %w", r.ID, err)
+			}
+		}
 	}
 	if r.Surfaces.PullRequest != nil {
 		switch r.Surfaces.PullRequest.Mode {
@@ -271,7 +289,10 @@ func (r Reflex) ComputeFingerprint(repoRoot string) (string, error) {
 	}
 
 	if repoRoot != "" && r.Artifact.Path != "" {
-		artPath := filepath.Join(repoRoot, filepath.FromSlash(r.Artifact.Path))
+		artPath, err := gitutil.LocalPath(repoRoot, r.Artifact.Path)
+		if err != nil {
+			return "", err
+		}
 		data, err := os.ReadFile(artPath)
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return "", fmt.Errorf("read artifact %s: %w", r.Artifact.Path, err)
@@ -296,73 +317,154 @@ func LoadFile(path string) (Reflex, error) {
 	if err != nil {
 		return Reflex{}, fmt.Errorf("read reflex %s: %w", path, err)
 	}
+	return ParseBytes(data, path)
+}
+
+// ParseBytes decodes and validates a reflex YAML payload.
+func ParseBytes(data []byte, sourcePath string) (Reflex, error) {
 	var r Reflex
 	if err := yaml.Unmarshal(data, &r); err != nil {
-		return Reflex{}, fmt.Errorf("decode reflex %s: %w", path, err)
+		return Reflex{}, fmt.Errorf("decode reflex %s: %w", sourcePath, err)
 	}
 	if r.Version == 0 {
 		r.Version = 1
 	}
 	if err := r.Validate(); err != nil {
-		return Reflex{}, fmt.Errorf("validate reflex %s: %w", path, err)
+		return Reflex{}, fmt.Errorf("validate reflex %s: %w", sourcePath, err)
 	}
-	r.FilePath = path
+	r.FilePath = sourcePath
 	return r, nil
 }
 
-// LoadAll reads all reflex YAML files under .flinch/reflexes sorted by ID.
+// LoadAll gives canonical check records precedence over the corresponding legacy records.
 func LoadAll(repoRoot string) ([]Reflex, error) {
-	dir := filepath.Join(repoRoot, filepath.FromSlash(ReflexesRelDir))
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("read reflexes directory: %w", err)
-	}
 	var out []Reflex
-	for _, entry := range entries {
-		if entry.IsDir() {
+	seen := make(map[string]bool)
+	for _, sub := range []string{ReflexesRelDir, LegacyRelDir} {
+		dir := filepath.Join(repoRoot, filepath.FromSlash(sub))
+		entries, err := os.ReadDir(dir)
+		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
-		name := entry.Name()
-		if !strings.HasSuffix(name, ".yml") && !strings.HasSuffix(name, ".yaml") {
-			continue
-		}
-		r, err := LoadFile(filepath.Join(dir, name))
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, r)
+		for _, entry := range entries {
+			name := entry.Name()
+			ext := filepath.Ext(name)
+			if entry.IsDir() || (ext != ".yml" && ext != ".yaml") || seen[strings.TrimSuffix(name, ext)] {
+				continue
+			}
+			r, err := LoadFile(filepath.Join(dir, name))
+			if err != nil {
+				return nil, err
+			}
+			if r.ID != strings.TrimSuffix(name, ext) {
+				return nil, fmt.Errorf("check ID %q does not match record %q", r.ID, name)
+			}
+			seen[r.ID] = true
+			out = append(out, r)
+		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out, nil
 }
 
-// Save writes a reflex record atomically to .flinch/reflexes/<id>.yml.
+// Save adds a stable, reviewed record, preserving existing files and human edits.
 func Save(repoRoot string, r Reflex) (string, error) {
+	return SaveContext(context.Background(), repoRoot, r)
+}
+
+// SaveContext stops publication when the caller's verification budget expires.
+func SaveContext(ctx context.Context, repoRoot string, r Reflex) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	if r.Version == 0 {
 		r.Version = 1
 	}
 	if err := r.Validate(); err != nil {
 		return "", err
 	}
-	dir := filepath.Join(repoRoot, filepath.FromSlash(ReflexesRelDir))
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return "", fmt.Errorf("create reflexes dir: %w", err)
-	}
-	path := filepath.Join(dir, r.ID+".yml")
+	proof := r.Proof
+	r.Proof, r.Fingerprint = nil, ""
 	data, err := yaml.Marshal(r)
 	if err != nil {
-		return "", fmt.Errorf("marshal reflex %s: %w", r.ID, err)
+		return "", err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return "", fmt.Errorf("write temp reflex: %w", err)
+
+	// A legacy or alternate-extension record also owns its ID. Re-proving it may
+	// refresh local measurements, but must preserve the reviewed file and comments.
+	for _, sub := range []string{ReflexesRelDir, LegacyRelDir} {
+		for _, extension := range []string{".yaml", ".yml"} {
+			path := filepath.Join(repoRoot, filepath.FromSlash(sub), r.ID+extension)
+			existing, err := LoadFile(path)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				return "", err
+			}
+			if err := compareStableRecord(existing, data); err != nil {
+				return "", err
+			}
+			if proof != nil {
+				if err := SaveLocalProof(ctx, repoRoot, r, *proof); err != nil {
+					return "", err
+				}
+			}
+			return path, nil
+		}
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return "", fmt.Errorf("commit reflex: %w", err)
+
+	dir := filepath.Join(repoRoot, filepath.FromSlash(ReflexesRelDir))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	tmp, err := os.CreateTemp(dir, ".check-*")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		return "", err
+	}
+	if proof != nil {
+		if err := SaveLocalProof(ctx, repoRoot, r, *proof); err != nil {
+			return "", err
+		}
+	}
+	path := filepath.Join(dir, r.ID+".yml")
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if err := os.Link(tmp.Name(), path); err != nil {
+		if !errors.Is(err, os.ErrExist) {
+			return "", err
+		}
+		existing, err := LoadFile(path)
+		if err != nil {
+			return "", err
+		}
+		if err := compareStableRecord(existing, data); err != nil {
+			return "", err
+		}
 	}
 	return path, nil
+}
+
+func compareStableRecord(existing Reflex, expected []byte) error {
+	existing.Proof, existing.Fingerprint = nil, ""
+	data, err := yaml.Marshal(existing)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(data, expected) {
+		return fmt.Errorf("check ID %q is already assigned to a different reviewed contract", existing.ID)
+	}
+	return nil
 }
