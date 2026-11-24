@@ -1,0 +1,20 @@
+# Internal design documents and audits
+/.internal/
+
+# Local tooling and workspace state
+/.graymatter/
+/.local/
+
+# Internal blueprint and generated PDF reports
+/flinch-blueprint.md
+/output/pdf/
+
+# Build and test artifacts
+/flinch
+/flinch.exe
+/bin/
+/dist/
+*.test
+*.out
+coverage.txt
+.flinch/.work/
