@@ -412,7 +412,7 @@ func TestTurnCheckLogicalTurnTestBudgetPersistsAcrossContinuations(t *testing.T)
 	}
 }
 
-// Regression test (D6, P8): Deleting .flinch/checks/<id>.yml must be detected as reflex_deleted.
+// Regression test (D6, P8): Deleting .flinch/checks/<id>.yml must be detected as check_deleted.
 func TestIntegrityDetectsDeletedReflexRecord(t *testing.T) {
 	repo, cfg := setupCheckRepo(t)
 	ctx := context.Background()
@@ -430,16 +430,16 @@ func TestIntegrityDetectsDeletedReflexRecord(t *testing.T) {
 		t.Fatalf("RunTurn after reflex delete: %v", err)
 	}
 	if !res.Blocking || len(res.IntegrityViolations) == 0 {
-		t.Fatalf("expected blocking reflex_deleted violation, got %+v", res)
+		t.Fatalf("expected blocking check_deleted violation, got %+v", res)
 	}
 	foundDeleted := false
 	for _, v := range res.IntegrityViolations {
-		if v.Kind == "reflex_deleted" && v.ReflexID == "vet-printf" {
+		if v.Kind == "check_deleted" && v.ReflexID == "vet-printf" {
 			foundDeleted = true
 		}
 	}
 	if !foundDeleted {
-		t.Fatalf("expected reflex_deleted for vet-printf, got %+v", res.IntegrityViolations)
+		t.Fatalf("expected check_deleted for vet-printf, got %+v", res.IntegrityViolations)
 	}
 }
 

@@ -234,7 +234,7 @@ func runReport(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		return 2
 	}
 	if fs.NArg() < 1 {
-		fmt.Fprintln(stderr, "flinch report: usage: flinch report <reflex-id> --at <path:line> --reason \"<why>\"")
+		fmt.Fprintln(stderr, "flinch report: usage: flinch report <check-id> --at <path:line> --reason \"<why>\"")
 		return 2
 	}
 	reflexID := fs.Arg(0)
@@ -259,7 +259,7 @@ func runReport(ctx context.Context, args []string, stdout, stderr io.Writer) int
 
 	rec := map[string]any{
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
-		"reflex_id": reflexID,
+		"check_id":  reflexID,
 		"at":        *at,
 		"reason":    *reason,
 	}

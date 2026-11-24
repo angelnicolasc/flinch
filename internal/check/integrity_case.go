@@ -46,7 +46,7 @@ func artifactCaseIntact(r reflex.Reflex, trustedBytes, currBytes []byte) (bool, 
 		return compareSharedConfigEntry(r.ExpectedID(), normTrusted, normCurr)
 	}
 
-	return false, fmt.Sprintf("artifact %s backing reflex %s was modified", r.Artifact.Path, r.ID)
+	return false, fmt.Sprintf("artifact %s backing check %s was modified", r.Artifact.Path, r.ID)
 }
 
 func compareGoTestCase(selector string, trustedBytes, currBytes []byte) (bool, string) {

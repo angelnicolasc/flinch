@@ -32,7 +32,7 @@ const (
 
 // FindingWithReflex pairs a normalized diagnostic with the reflex that triggered it.
 type FindingWithReflex struct {
-	ReflexID   string          `json:"reflex_id"`
+	ReflexID   string          `json:"check_id"`
 	Rung       reflex.Rung     `json:"rung"`
 	Obligation string          `json:"obligation"`
 	FixHint    string          `json:"fix_hint,omitempty"`
@@ -42,7 +42,7 @@ type FindingWithReflex struct {
 
 // SkippedControl explains why a reflex was not evaluated in this run.
 type SkippedControl struct {
-	ReflexID string `json:"reflex_id"`
+	ReflexID string `json:"check_id"`
 	Reason   string `json:"reason"`
 }
 
@@ -335,7 +335,7 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 			if wtErr != nil {
 				res.SkippedControls = append(res.SkippedControls, SkippedControl{
 					ReflexID: r.ID,
-					Reason:   fmt.Sprintf("baseline unavailable for test reflex (%v); failing open", wtErr),
+					Reason:   fmt.Sprintf("baseline unavailable for test check (%v); failing open", wtErr),
 				})
 				continue
 			}

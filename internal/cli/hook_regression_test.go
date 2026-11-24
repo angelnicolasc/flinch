@@ -20,7 +20,7 @@ func TestReportParsesFlagsAfterID(t *testing.T) {
 	var out, errors bytes.Buffer
 	code := Run(context.Background(), []string{"report", "retry", "--at", "src/main.go:12", "--reason", "allowed case", "--json"}, &out, &errors)
 	var got map[string]any
-	if code != 0 || json.Unmarshal(out.Bytes(), &got) != nil || got["at"] != "src/main.go:12" || got["reason"] != "allowed case" || got["reflex_id"] != "retry" {
+	if code != 0 || json.Unmarshal(out.Bytes(), &got) != nil || got["at"] != "src/main.go:12" || got["reason"] != "allowed case" || got["check_id"] != "retry" {
 		t.Fatalf("report lost flags: %s (%s)", out.String(), errors.String())
 	}
 }

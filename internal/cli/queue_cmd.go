@@ -69,7 +69,7 @@ func runSignal(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	fixedRef := fs.String("fixed", "", "fixed Git ref")
 	pathsCSV := fs.String("paths", "", "comma-separated affected repo paths")
 	summary := fs.String("summary", "", "redacted signal summary")
-	escapeOf := fs.String("escape-of", "", "reflex ID escaped by this incident (boosts priority)")
+	escapeOf := fs.String("escape-of", "", "check ID escaped by this incident (boosts priority)")
 	cursor := fs.String("cursor", "", "source cursor watermark saved strictly after signal persistence")
 	asJSON := fs.Bool("json", false, "output JSON")
 	if err := fs.Parse(args); err != nil {

@@ -66,27 +66,24 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 }
 
 func printUsage(w io.Writer) {
-	fmt.Fprint(w, `flinch - deterministic verification and enforcement for repository protections
+	fmt.Fprint(w, `flinch - turn corrections to coding agents into checks your repository runs
 
 Usage:
   flinch <command> [flags]
 
 Commands:
-  init        Enable this clone and optionally configure team overrides or host hooks
-  prove       Verify a candidate protection against broken, fixed, and allowed cases
-  check       Run active protections (--turn, --ci) or accredit an integrated SHA (--accredit)
-  hook        Host hook adapter entrypoint (--host claude|codex|antigravity --event <event>)
-  pause       Pause Flinch capture and hooks for the local clone and worktrees
-  resume      Resume Flinch capture and hooks
-  skip        Close a nominated correction silently with a logged reason
-  report      Report a suspected false positive without suppressing the protection
-  checkpoint  Capture a working-tree baseline for an interactive agent turn
-  signal      Record a deduplicated signal into the local episode queue
-  queue       Inspect, claim, release, suspend, or record deliveries on queued episodes
-  doctor      Inspect installation capability matrix, accreditation freshness, and worktrees
-  cleanup     Prune expired local checkpoints, proof trees, and log events per retention_days
-  stats       Show local enforcement counts, denominators, omissions, and turn p95 latency
-  version     Print CLI version
+  init        Enable this clone and install hooks for a host (--hooks claude|codex|antigravity)
+  prove       Prove a candidate check against the original mistake, the fix and an allowed case
+  check       Run the reviewed checks at the end of a turn (--turn) or in CI (--ci)
+  hook        Entry point the host hooks call (--host <host> --event <event>)
+  pause       Pause Flinch in this clone and its worktrees
+  resume      Resume Flinch in this clone
+  skip        Close a nominated correction with a reason
+  report      Record a disputed finding without disabling the check
+  doctor      Show hosts, discovered tools and local diagnostics
+  cleanup     Remove local state older than retention_days
+  stats       Show local check and turn counts
+  version     Print the CLI version
 `)
 }
 

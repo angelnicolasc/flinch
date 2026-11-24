@@ -15,7 +15,7 @@ import (
 
 // IntegrityViolation flags unauthorized edits to active reflexes or newly added suppression pragmas (§8.1).
 type IntegrityViolation struct {
-	ReflexID string `json:"reflex_id,omitempty"`
+	ReflexID string `json:"check_id,omitempty"`
 	Path     string `json:"path"`
 	Kind     string `json:"kind"` // reflex_modified | reflex_deleted | artifact_modified | suppression_added
 	Detail   string `json:"detail"`
@@ -55,15 +55,15 @@ func CheckIntegrity(ctx context.Context, repoRoot, trustedRef string, reflexes [
 				violations = append(violations, IntegrityViolation{
 					ReflexID: r.ID,
 					Path:     relReflex,
-					Kind:     "reflex_deleted",
-					Detail:   fmt.Sprintf("active reflex record %s was deleted relative to %s", relReflex, trustedRef),
+					Kind:     "check_deleted",
+					Detail:   fmt.Sprintf("reviewed check record %s was deleted relative to %s", relReflex, trustedRef),
 				})
 			} else if readErr == nil && !bytes.Equal(normalizeLineEndings(trustedReflexBytes), normalizeLineEndings(currBytes)) {
 				violations = append(violations, IntegrityViolation{
 					ReflexID: r.ID,
 					Path:     relReflex,
-					Kind:     "reflex_modified",
-					Detail:   fmt.Sprintf("active reflex record %s was modified relative to %s; reflexes change only through human review", relReflex, trustedRef),
+					Kind:     "check_modified",
+					Detail:   fmt.Sprintf("reviewed check record %s was modified relative to %s; checks change only through review", relReflex, trustedRef),
 				})
 			}
 		}
@@ -79,7 +79,7 @@ func CheckIntegrity(ctx context.Context, repoRoot, trustedRef string, reflexes [
 						ReflexID: r.ID,
 						Path:     relArt,
 						Kind:     "artifact_modified",
-						Detail:   fmt.Sprintf("artifact %s backing reflex %s was deleted relative to %s", relArt, r.ID, trustedRef),
+						Detail:   fmt.Sprintf("artifact %s backing check %s was deleted relative to %s", relArt, r.ID, trustedRef),
 					})
 				} else if readErr == nil {
 					if intact, reason := artifactCaseIntact(r, trustedArtBytes, currArt); !intact {

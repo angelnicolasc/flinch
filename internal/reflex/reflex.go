@@ -222,13 +222,13 @@ func (r Reflex) Validate() error {
 		return fmt.Errorf("invalid check ID %q", r.ID)
 	}
 	if r.Version < 1 {
-		return fmt.Errorf("reflex %q version must be >= 1, got %d", r.ID, r.Version)
+		return fmt.Errorf("check %q version must be >= 1, got %d", r.ID, r.Version)
 	}
 	if strings.TrimSpace(r.Obligation) == "" {
-		return fmt.Errorf("reflex %q obligation is required", r.ID)
+		return fmt.Errorf("check %q obligation is required", r.ID)
 	}
 	if strings.TrimSpace(r.Artifact.Tool) == "" {
-		return fmt.Errorf("reflex %q artifact.tool is required", r.ID)
+		return fmt.Errorf("check %q artifact.tool is required", r.ID)
 	}
 	paths := []string{r.Artifact.Path, r.Cases.TargetPath, r.Cases.Broken, r.Cases.Fixed}
 	if r.EffectiveRung() != RungTest {
@@ -245,22 +245,22 @@ func (r Reflex) Validate() error {
 		switch r.Surfaces.PullRequest.Mode {
 		case "", "block", "warn", "disabled":
 		default:
-			return fmt.Errorf("reflex %q invalid pull_request.mode %q", r.ID, r.Surfaces.PullRequest.Mode)
+			return fmt.Errorf("check %q invalid pull_request.mode %q", r.ID, r.Surfaces.PullRequest.Mode)
 		}
 	}
 	if r.Surfaces.AgentTurn != nil {
 		switch r.Surfaces.AgentTurn.Mode {
 		case "", "repair_if_supported", "advise", "disabled":
 		default:
-			return fmt.Errorf("reflex %q invalid agent_turn.mode %q", r.ID, r.Surfaces.AgentTurn.Mode)
+			return fmt.Errorf("check %q invalid agent_turn.mode %q", r.ID, r.Surfaces.AgentTurn.Mode)
 		}
 	}
 	if r.EffectiveRung() == RungLine {
 		if strings.TrimSpace(r.Artifact.Text) == "" {
-			return fmt.Errorf("reflex %q line artifact requires artifact.text", r.ID)
+			return fmt.Errorf("check %q line artifact requires artifact.text", r.ID)
 		}
 		if len(r.Artifact.Text) > 200 || strings.ContainsAny(r.Artifact.Text, "\r\n") {
-			return fmt.Errorf("reflex %q line artifact must be a single line <= 200 chars", r.ID)
+			return fmt.Errorf("check %q line artifact must be a single line <= 200 chars", r.ID)
 		}
 	}
 	return nil
@@ -315,7 +315,7 @@ func (r Reflex) ComputeFingerprint(repoRoot string) (string, error) {
 func LoadFile(path string) (Reflex, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Reflex{}, fmt.Errorf("read reflex %s: %w", path, err)
+		return Reflex{}, fmt.Errorf("read check %s: %w", path, err)
 	}
 	return ParseBytes(data, path)
 }
@@ -324,13 +324,13 @@ func LoadFile(path string) (Reflex, error) {
 func ParseBytes(data []byte, sourcePath string) (Reflex, error) {
 	var r Reflex
 	if err := yaml.Unmarshal(data, &r); err != nil {
-		return Reflex{}, fmt.Errorf("decode reflex %s: %w", sourcePath, err)
+		return Reflex{}, fmt.Errorf("decode check %s: %w", sourcePath, err)
 	}
 	if r.Version == 0 {
 		r.Version = 1
 	}
 	if err := r.Validate(); err != nil {
-		return Reflex{}, fmt.Errorf("validate reflex %s: %w", sourcePath, err)
+		return Reflex{}, fmt.Errorf("validate check %s: %w", sourcePath, err)
 	}
 	r.FilePath = sourcePath
 	return r, nil

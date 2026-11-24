@@ -141,7 +141,7 @@ func verifyTest(ctx context.Context, repoRoot string, spec CandidateSpec, report
 	if selector == "" {
 		report.Verdict = VerdictInconclusive
 		report.Reason = ReasonMissingSelector
-		report.ActionableError = "a non-empty exact selector is required for test proofs (D4)"
+		report.ActionableError = "a non-empty exact selector is required for test proofs"
 		return
 	}
 
@@ -149,7 +149,7 @@ func verifyTest(ctx context.Context, repoRoot string, spec CandidateSpec, report
 	if len(neighbors) == 0 {
 		report.Verdict = VerdictInconclusive
 		report.Reason = ReasonMissingAllowedCase
-		report.ActionableError = "test proof requires at least one legitimate neighbor case (neighbor_selector or allowed_cases[].selector; D4)"
+		report.ActionableError = "test proof requires at least one legitimate neighbor case (neighbor_selector or allowed_cases[].selector)"
 		return
 	}
 	for _, nb := range neighbors {
@@ -554,7 +554,7 @@ func verifyLintOrStructure(ctx context.Context, repoRoot string, r reflex.Reflex
 	if len(spec.AllowedCases) == 0 {
 		report.Verdict = VerdictInconclusive
 		report.Reason = ReasonMissingAllowedCase
-		report.ActionableError = "lint/structure proof requires at least one in-scope allowed neighbor case (D4)"
+		report.ActionableError = "lint/structure proof requires at least one in-scope allowed neighbor case"
 		return
 	}
 	if !verifyAllowedCases(ctx, fixedWT, r, spec, fixedFiltered, report, timeout) {
@@ -696,7 +696,7 @@ func verifyAllowedCases(
 		}
 		if !inScope {
 			acr.Passed = false
-			acr.Detail = fmt.Sprintf("allowed case target %q is outside reflex scope %q", target, r.Scope)
+			acr.Detail = fmt.Sprintf("allowed case target %q is outside check scope %q", target, r.Scope)
 			report.AllowedResults = append(report.AllowedResults, acr)
 			report.Verdict = VerdictInconclusive
 			report.Reason = ReasonAllowedCaseOutOfScope
@@ -968,7 +968,7 @@ func verifyTestNeighbors(
 		for _, tc := range matched {
 			switch tc.Outcome {
 			case runner.OutcomeSkip:
-				acr.Detail = fmt.Sprintf("neighbor test %q was skipped; skipped neighbors never satisfy proof (D4)", tc.Name)
+				acr.Detail = fmt.Sprintf("neighbor test %q was skipped; skipped neighbors never satisfy proof", tc.Name)
 				report.AllowedResults = append(report.AllowedResults, acr)
 				report.Verdict = VerdictInconclusive
 				report.Reason = ReasonNeighborSkipped

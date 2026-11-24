@@ -29,7 +29,7 @@ const (
 type Event struct {
 	Timestamp  time.Time `json:"timestamp"`
 	Kind       EventKind `json:"kind"`
-	ReflexID   string    `json:"reflex_id,omitempty"`
+	ReflexID   string    `json:"check_id,omitempty"`
 	Surface    string    `json:"surface,omitempty"`
 	DurationMS int64     `json:"duration_ms,omitempty"`
 	Reason     string    `json:"reason,omitempty"`
@@ -40,7 +40,7 @@ type Event struct {
 type Summary struct {
 	Schema                  int        `json:"schema"`
 	ObservedScope           string     `json:"observed_scope"`
-	DeterministicReflexes   int        `json:"deterministic_reflexes"`
+	DeterministicReflexes   int        `json:"deterministic_checks"`
 	ProbabilisticGuides     int        `json:"probabilistic_guides"`
 	TurnsChecked            int        `json:"turns_checked"`
 	TurnInterceptions       int        `json:"turn_interceptions"`

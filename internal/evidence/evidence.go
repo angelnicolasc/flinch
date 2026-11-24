@@ -161,7 +161,7 @@ func (r *ActivationRecord) EvaluateStatus() SurfaceStatus {
 // IsValidFor checks whether this accreditation still applies to the given fingerprint, workflow hash, and SHA.
 func (r ActivationRecord) IsValidFor(reflexFingerprint, workflowHash, integratedSHA string) (bool, string) {
 	if reflexFingerprint != "" && r.ReflexFingerprint != "" && r.ReflexFingerprint != reflexFingerprint {
-		return false, "reflex artifact or configuration changed since accreditation"
+		return false, "check artifact or configuration changed since accreditation"
 	}
 	if integratedSHA != "" && r.IntegratedSHA != "" && r.IntegratedSHA != integratedSHA {
 		return false, "integrated SHA changed since accreditation"

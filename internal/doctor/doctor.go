@@ -66,10 +66,10 @@ type Report struct {
 	Workflows              []string                   `json:"workflows,omitempty"`
 	ContextFiles           []string                   `json:"context_files,omitempty"`
 	Capabilities           CapabilityMatrix           `json:"capabilities"`
-	DeterministicReflexes  int                        `json:"deterministic_reflexes"`
+	DeterministicReflexes  int                        `json:"deterministic_checks"`
 	ProbabilisticGuides    int                        `json:"probabilistic_guides"`
 	UnrecognizedAssertions int                        `json:"no_recognized_assertion"`
-	ReflexHealth           []ReflexHealth             `json:"reflex_health,omitempty"`
+	ReflexHealth           []ReflexHealth             `json:"check_health,omitempty"`
 	PrunedOrphanWorktrees  int                        `json:"pruned_orphan_worktrees,omitempty"`
 	Cleanup                *check.CleanupReport       `json:"cleanup,omitempty"`
 }
@@ -212,9 +212,9 @@ func buildCapabilityMatrix(
 
 	// 3. Turn enforcement
 	if hasActiveTurn {
-		m.TurnEnforcement = CapabilityEntry{State: CapEnabledAndTested, Detail: "at least one deterministic reflex accredited on agent_turn surface"}
+		m.TurnEnforcement = CapabilityEntry{State: CapEnabledAndTested, Detail: "at least one deterministic check accredited on agent_turn surface"}
 	} else if hasHost {
-		m.TurnEnforcement = CapabilityEntry{State: CapAvailableUntested, Detail: "agent host detected; no reflex accredited on agent_turn yet"}
+		m.TurnEnforcement = CapabilityEntry{State: CapAvailableUntested, Detail: "agent host detected; no check accredited on agent_turn yet"}
 	} else {
 		m.TurnEnforcement = CapabilityEntry{State: CapUnavailable, Detail: "No supported agent executable detected on PATH."}
 	}

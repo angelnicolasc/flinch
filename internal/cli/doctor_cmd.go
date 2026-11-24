@@ -47,7 +47,7 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	}
 	printCapabilityMatrix(stdout, rep.Capabilities)
 	if len(rep.ReflexHealth) > 0 {
-		fmt.Fprintln(stdout, "\nReflex accreditation:")
+		fmt.Fprintln(stdout, "\nCheck accreditation:")
 		for _, rh := range rep.ReflexHealth {
 			fmt.Fprintf(stdout, "  - %s (v%d, %s): ci=%s turn=%s fresh=%v",
 				rh.ID, rh.Version, rh.Rung, rh.CIStatus, rh.TurnStatus, rh.Fresh)
