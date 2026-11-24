@@ -2,7 +2,9 @@ package gitutil
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -105,6 +107,38 @@ func TestCaptureWorkingTreeSnapshotPreservesIndexAndUntrackedFiles(t *testing.T)
 	}
 }
 
+func TestPruneAbandonedProofAfterProcessExit(t *testing.T) {
+	ctx := context.Background()
+	const flag = "FLINCH_TEST_ABANDONED_TREE"
+	if repo := os.Getenv(flag); repo != "" {
+		wt, err := CreateWorktree(ctx, repo, "HEAD", "abandoned-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		fmt.Print(wt.Path)
+		os.Exit(0) // Simulate a worker exiting before it can run Cleanup.
+	}
+
+	repo := initTestRepo(t)
+	cmd := exec.Command(os.Args[0], "-test.run=^TestPruneAbandonedProofAfterProcessExit$")
+	cmd.Env = append(os.Environ(), flag+"="+repo)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("start proof owner: %v: %s", err, output)
+	}
+	path := string(output)
+	if _, err := os.Stat(filepath.Join(path, "main.go")); err != nil {
+		t.Fatalf("expected abandoned tree before prune: %v", err)
+	}
+	removed, err := PruneOrphanWorktrees(ctx, repo)
+	if removed != 1 || err != nil {
+		t.Fatalf("prune = %d, %v", removed, err)
+	}
+	if _, err := os.Stat(path); !os.IsNotExist(err) {
+		t.Fatalf("proof directory still exists after prune: %v", err)
+	}
+}
+
 func TestWorktreeLifecycle(t *testing.T) {
 	repo := initTestRepo(t)
 	ctx := context.Background()
@@ -124,5 +158,43 @@ func TestWorktreeLifecycle(t *testing.T) {
 	}
 	if _, err := os.Stat(wt.Path); !os.IsNotExist(err) {
 		t.Fatalf("expected worktree directory to be removed")
+	}
+}
+
+// Regression test (D11, P2): Snapshot capture and proof-tree materialization must succeed
+// even when a repository installs a strict reference-transaction hook rejecting unsigned
+// commits or worktree HEAD ref updates.
+func TestSnapshotAndMaterializeRespectStrictReferenceTransactionHook(t *testing.T) {
+	repo := initTestRepo(t)
+	ctx := context.Background()
+
+	// Install a reference-transaction hook that fails on any worktrees/*/HEAD update.
+	hookPath := filepath.Join(repo, ".git", "hooks", "reference-transaction")
+	hookScript := "#!/bin/sh\nwhile read -r old new ref; do\n  case \"$ref\" in worktrees/*/HEAD) echo \"refused $ref\" >&2; exit 1 ;; esac\ndone\n"
+	if err := os.WriteFile(hookPath, []byte(hookScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Dirty the working tree with an uncommitted edit + untracked file.
+	if err := os.WriteFile(filepath.Join(repo, "main.go"), []byte("package main\n// dirty\nfunc main() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "new.go"), []byte("package main\nfunc Helper() {}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	treeOID, err := CaptureWorkingTreeSnapshot(ctx, repo, "ignored")
+	if err != nil {
+		t.Fatalf("CaptureWorkingTreeSnapshot rejected by signing hook: %v", err)
+	}
+	wt, err := CreateWorktree(ctx, repo, treeOID, "signed-policy-")
+	if err != nil {
+		t.Fatalf("CreateWorktree rejected by signing hook: %v", err)
+	}
+	defer wt.Cleanup(ctx)
+
+	b, err := os.ReadFile(filepath.Join(wt.Path, "new.go"))
+	if err != nil || !strings.Contains(string(b), "Helper") {
+		t.Fatalf("expected materialized untracked file in proof tree, err=%v", err)
 	}
 }

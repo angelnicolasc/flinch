@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,7 +37,12 @@ type FileChange struct {
 
 // Run executes git with args in dir and returns stdout, stderr, and any error.
 func Run(ctx context.Context, dir string, env []string, args ...string) (string, string, error) {
+	return runWithInput(ctx, dir, env, nil, args...)
+}
+
+func runWithInput(ctx context.Context, dir string, env []string, input io.Reader, args ...string) (string, string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Stdin = input
 	cmd.Dir = dir
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
@@ -86,9 +92,12 @@ func FlinchStateDir(ctx context.Context, repoRoot string) (string, error) {
 	return dir, nil
 }
 
-// ResolveRef resolves a Git reference to a full 40-char commit SHA.
+// ResolveRef resolves a Git reference (commit, tag, branch, or pure tree OID) to a full 40-char OID.
 func ResolveRef(ctx context.Context, repoRoot, ref string) (string, error) {
-	out, _, err := Run(ctx, repoRoot, nil, "rev-parse", "--verify", ref+"^{commit}")
+	if out, _, err := Run(ctx, repoRoot, nil, "rev-parse", "--verify", ref+"^{commit}"); err == nil {
+		return strings.TrimSpace(out), nil
+	}
+	out, _, err := Run(ctx, repoRoot, nil, "rev-parse", "--verify", ref+"^{tree}")
 	if err != nil {
 		return "", err
 	}
@@ -124,6 +133,22 @@ func FileAtRef(ctx context.Context, repoRoot, ref, relPath string) ([]byte, erro
 		return nil, fmt.Errorf("git show %s: %w (%s)", spec, err, strings.TrimSpace(msg))
 	}
 	return stdout.Bytes(), nil
+}
+
+// ListTreeFiles returns repo-relative forward-slash file paths under dirPath at ref.
+func ListTreeFiles(ctx context.Context, repoRoot, ref, dirPath string) ([]string, error) {
+	out, _, err := Run(ctx, repoRoot, nil, "ls-tree", "-r", "--name-only", ref, "--", filepath.ToSlash(dirPath))
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, line := range strings.Split(strings.ReplaceAll(out, "\r\n", "\n"), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" {
+			files = append(files, filepath.ToSlash(trimmed))
+		}
+	}
+	return files, nil
 }
 
 // WorkingTreeStatus returns a map of repo-relative slash paths to content SHA-256 hashes
