@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -215,12 +216,56 @@ func extractGoTableRowAndSkeleton(fset *token.FileSet, fn *ast.FuncDecl, target 
 
 	rowFormatted = formatASTNode(fset, matchedElt)
 
-	// Temporarily replace tableLit.Elts with nil to format the surrounding test loop & assertions.
+	// Keep the table shape, its loop, and the setup those two and this row use.
 	origElts := tableLit.Elts
-	tableLit.Elts = nil
-	skeletonFormatted = formatASTNode(fset, fn)
+	tableLit.Elts = []ast.Expr{matchedElt}
+	original := fn.Body.List
+	var kept []ast.Stmt
+	used := make(map[*ast.Object]bool)
+	for i := len(original) - 1; i >= 0; i-- {
+		stmt := original[i]
+		if stmt.End() < tableLit.Pos() && !goSetupNeeded(stmt, used) {
+			continue
+		}
+		kept = append(kept, stmt)
+		ast.Inspect(stmt, func(n ast.Node) bool {
+			if id, ok := n.(*ast.Ident); ok && id.Obj != nil {
+				used[id.Obj] = true
+			}
+			return true
+		})
+	}
+	slices.Reverse(kept)
+	fn.Body.List = kept
+	skeletonFormatted = formatASTNode(token.NewFileSet(), fn)
+	fn.Body.List = original
 	tableLit.Elts = origElts
 	return rowFormatted, skeletonFormatted
+}
+
+// Keep ordinary statements, including assignments that may change a value
+// before the loop. Only an unreferenced local declaration can be omitted.
+func goSetupNeeded(stmt ast.Stmt, used map[*ast.Object]bool) bool {
+	switch d := stmt.(type) {
+	case *ast.AssignStmt:
+		if d.Tok != token.DEFINE {
+			return true
+		}
+		for _, lhs := range d.Lhs {
+			if id, ok := lhs.(*ast.Ident); !ok || used[id.Obj] {
+				return true
+			}
+		}
+		return false
+	case *ast.DeclStmt:
+		for obj := range used {
+			if pos := obj.Pos(); stmt.Pos() <= pos && pos < stmt.End() {
+				return true
+			}
+		}
+		return false
+	}
+	return true
 }
 
 func extractTableElementName(elt ast.Expr) (string, bool) {

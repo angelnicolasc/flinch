@@ -10,6 +10,7 @@ All notable changes to Flinch are recorded here. The format follows [Keep a Chan
 
 ### Fixed
 
+- A Go table row can add its own setup without invalidating another row. Changes to setup used by the protected row or its loop still trigger an integrity finding.
 - Go integrity checks distinguish a nested subtest from its siblings.
 - TypeScript table tests with nested or function type arguments retain their row selectors.
 - JavaScript regular expressions after logical operators or a semicolon no longer conceal tests during discovery or integrity checks.
