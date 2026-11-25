@@ -10,6 +10,8 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      publish_packages: ${{ steps.packages.outputs.publish }}
     permissions:
       contents: write
       id-token: write
@@ -26,7 +28,9 @@ jobs:
           go-version-file: go.mod
 
       - name: Run tests
-        run: go test -count=1 ./...
+        run: |
+          go test -count=1 ./...
+          python3 -m unittest discover -s scripts -p 'test_release_manifests.py'
 
       - name: Build archives
         env:
@@ -54,6 +58,20 @@ jobs:
             rm -rf "dist/$name"
           done
           (cd dist && sha256sum -- *.tar.gz *.zip > checksums.txt)
+
+      - name: Prepare stable package-manager manifests
+        id: packages
+        env:
+          TAG: ${{ github.ref_name }}
+          HAS_PACKAGE_TOKEN: ${{ secrets.PACKAGE_MANAGER_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          if [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            python3 scripts/release_manifests.py "$TAG" dist/checksums.txt "$RUNNER_TEMP/package-manifests"
+            ruby -c "$RUNNER_TEMP/package-manifests/Formula/flinch.rb"
+            python3 -m json.tool "$RUNNER_TEMP/package-manifests/flinch.json" > /dev/null
+            echo "publish=$HAS_PACKAGE_TOKEN" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Write release notes
         env:
@@ -88,4 +106,53 @@ jobs:
           set -euo pipefail
           flags=()
           case "$TAG" in *-*) flags+=(--prerelease) ;; esac
-          gh release create "$TAG" dist/* --title "$TAG" --notes-file notes.md --verify-tag "${flags[@]}"
+          manifests=()
+          if [[ -d "$RUNNER_TEMP/package-manifests" ]]; then
+            manifests+=("$RUNNER_TEMP/package-manifests/Formula/flinch.rb" "$RUNNER_TEMP/package-manifests/flinch.json")
+          fi
+          gh release create "$TAG" dist/* "${manifests[@]}" --title "$TAG" --notes-file notes.md --verify-tag "${flags[@]}"
+
+  publish_packages:
+    needs: release
+    if: ${{ needs.release.outputs.publish_packages == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Download the released manifests
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern flinch.rb --pattern flinch.json
+
+      - name: Publish Homebrew and Scoop updates
+        env:
+          GH_TOKEN: ${{ secrets.PACKAGE_MANAGER_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          publish() {
+            local repo=$1 path=$2 file=$3 branch tree sha prior current
+            branch=$(gh api "repos/$repo" --jq .default_branch)
+            tree=$(gh api "repos/$repo/git/trees/$branch?recursive=1")
+            sha=$(jq -er --arg path "$path" 'if .truncated then error("incomplete repository tree") else [.tree[] | select(.path == $path) | .sha][0] // "" end' <<< "$tree")
+            if [[ -n "$sha" ]]; then
+              if [[ "$sha" == "$(git hash-object --no-filters "$file")" ]]; then return; fi
+              prior=$(gh api "repos/$repo/git/blobs/$sha" --jq .content | base64 --decode)
+              if [[ "$file" == *.json ]]; then
+                current=$(jq -er .version <<< "$prior")
+              else
+                current=$(sed -nE 's/^  version "([0-9]+\.[0-9]+\.[0-9]+)"$/\1/p' <<< "$prior")
+              fi
+              if [[ -z "$current" ]]; then echo "::error::Could not read $repo/$path version"; return 1; fi
+              if [[ "$(printf '%s\n' "$current" "${TAG#v}" | sort -V | tail -1)" != "${TAG#v}" ]]; then
+                echo "$repo/$path is already newer than $TAG"
+                return
+              fi
+            fi
+            jq -n --arg branch "$branch" --arg sha "$sha" --arg tag "$TAG" --rawfile contents "$file" \
+              '{branch:$branch, message:("Publish Flinch " + $tag), content:($contents | @base64)} + (if $sha == "" then {} else {sha:$sha} end)' |
+              gh api --method PUT "repos/$repo/contents/$path" --input - > /dev/null
+          }
+          publish angelnicolasc/homebrew-tap Formula/flinch.rb flinch.rb
+          publish angelnicolasc/scoop-bucket flinch.json flinch.json
