@@ -1,0 +1,29 @@
+$ErrorActionPreference='Stop'
+$limit=[Diagnostics.Process]::GetCurrentProcess().StartTime.ToUniversalTime().AddMilliseconds({milliseconds})
+$left={ [Math]::Max(0,[int]($limit-[DateTime]::UtcNow).TotalMilliseconds) }
+$p=New-Object Diagnostics.Process
+$started=$false
+$ready=$false
+$code=0
+try {
+$p.StartInfo.FileName='{executable}'
+$p.StartInfo.Arguments='{arguments}'
+$p.StartInfo.UseShellExecute=$false
+$p.StartInfo.EnvironmentVariables['FLINCH_HOOK_DEADLINE_MS']=([DateTimeOffset]$limit).ToUnixTimeMilliseconds().ToString()
+$p.StartInfo.RedirectStandardInput=$true
+$p.StartInfo.RedirectStandardOutput=$true
+$p.StartInfo.RedirectStandardError=$true
+if ((& $left) -eq 0) { throw 'timeout' }
+$started=$p.Start()
+$outputBytes=New-Object IO.MemoryStream
+$o=$p.StandardOutput.BaseStream.CopyToAsync($outputBytes)
+$e=$p.StandardError.BaseStream.CopyToAsync([Console]::OpenStandardError())
+$i=[Console]::OpenStandardInput().CopyToAsync($p.StandardInput.BaseStream)
+if (!$i.Wait((& $left))) { throw 'timeout' }
+$p.StandardInput.Close()
+if (!$p.WaitForExit((& $left)) -or !$o.Wait((& $left)) -or !$e.Wait((& $left))) { throw 'timeout' }
+$code=$p.ExitCode
+$ready=$true
+} catch { $ready=$false } finally { if ($started -and !$p.HasExited) { $p.Kill() }; $p.Dispose() }
+if ($ready) { $outputBytes.Position=0; [void]$outputBytes.CopyToAsync([Console]::OpenStandardOutput()).Wait((& $left)) } else { [Console]::Out.WriteLine('{}') }
+exit $code
