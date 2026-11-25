@@ -84,6 +84,54 @@ func TestCommandApprovalMatchesTheCommandAndScriptBytes(t *testing.T) {
 	run(ctx, root, script)
 }
 
+// Git for Windows checks proof trees out with CRLF under core.autocrlf, while the
+// reviewed file can keep LF. A line-ending conversion must keep the approval.
+func TestCommandApprovalIgnoresLineEndingConversion(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	path := "guard.sh"
+	art := reflex.Artifact{Tool: "script", Path: path, Command: "sh guard.sh"}
+	digest := func(content string, overlay map[string]string) string {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, path), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+		_, sum, err := commandDigest(ctx, root, art, overlay)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sum
+	}
+	lf := digest("echo one\necho two\n", nil)
+	if crlf := digest("echo one\r\necho two\r\n", nil); crlf != lf {
+		t.Fatal("converting LF to CRLF changed the approval digest")
+	}
+	if overlay := digest("unrelated\n", map[string]string{path: "echo one\r\necho two\r\n"}); overlay != lf {
+		t.Fatal("a CRLF proof overlay changed the approval digest")
+	}
+	for _, changed := range []string{"echo one\recho two\n", "echo one\necho two\n\r", "echo three\n"} {
+		if digest(changed, nil) == lf {
+			t.Fatalf("content %q kept the approval", changed)
+		}
+	}
+}
+
+func TestLineEndingWriterJoinsPairsAcrossWrites(t *testing.T) {
+	var out strings.Builder
+	w := &lineEndingWriter{w: &out}
+	for _, part := range []string{"a\r", "\nb\r", "c\r"} {
+		if _, err := w.Write([]byte(part)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); got != "a\nb\rc\r" {
+		t.Fatalf("got %q", got)
+	}
+}
+
 func TestCommandApprovalBindsCustomAnalyzerAndScriptArguments(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()

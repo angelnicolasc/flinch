@@ -413,10 +413,19 @@ func goCommandSource(name string) bool {
 	return false
 }
 
+// Git can check a proof tree out with CRLF line endings (core.autocrlf on Windows)
+// while the reviewed working file keeps LF, so the hash treats CRLF as LF.
 func approvalFileHash(root *os.Root, local string, overlay map[string]string) ([]byte, error) {
 	if data, ok := overlay[filepath.ToSlash(local)]; ok {
-		sum := sha256.Sum256([]byte(data))
-		return sum[:], nil
+		digest := sha256.New()
+		lines := &lineEndingWriter{w: digest}
+		if _, err := io.WriteString(lines, data); err != nil {
+			return nil, err
+		}
+		if err := lines.Close(); err != nil {
+			return nil, err
+		}
+		return digest.Sum(nil), nil
 	}
 	stat, err := root.Stat(local)
 	if err != nil {
@@ -431,8 +440,50 @@ func approvalFileHash(root *os.Root, local string, overlay map[string]string) ([
 	}
 	defer f.Close()
 	digest := sha256.New()
-	if _, err := io.Copy(digest, f); err != nil {
+	lines := &lineEndingWriter{w: digest}
+	if _, err := io.Copy(lines, f); err != nil {
+		return nil, err
+	}
+	if err := lines.Close(); err != nil {
 		return nil, err
 	}
 	return digest.Sum(nil), nil
+}
+
+// lineEndingWriter forwards bytes with each CRLF pair written as LF. A carriage
+// return that ends one Write is held until the next byte shows what follows it.
+type lineEndingWriter struct {
+	w         io.Writer
+	pendingCR bool
+}
+
+func (l *lineEndingWriter) Write(p []byte) (int, error) {
+	out := make([]byte, 0, len(p)+1)
+	for _, b := range p {
+		if l.pendingCR {
+			l.pendingCR = false
+			if b != '\n' {
+				out = append(out, '\r')
+			}
+		}
+		if b == '\r' {
+			l.pendingCR = true
+			continue
+		}
+		out = append(out, b)
+	}
+	if _, err := l.w.Write(out); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// Close writes a final carriage return that no line feed followed.
+func (l *lineEndingWriter) Close() error {
+	if !l.pendingCR {
+		return nil
+	}
+	l.pendingCR = false
+	_, err := l.w.Write([]byte{'\r'})
+	return err
 }
