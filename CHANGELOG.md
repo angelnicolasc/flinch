@@ -10,6 +10,7 @@ All notable changes to Flinch are recorded here. The format follows [Keep a Chan
 
 ### Fixed
 
+- An integrity finding for an ambiguous Vitest or Jest selector explains how to identify the test by its suite name.
 - When a correction changes a shared Vitest or Jest table callback, Flinch tries its rows before unrelated test edits.
 - Go test discovery preserves the enclosing test when it calls an unrelated `Run` method.
 - A Go table row can add its own setup without invalidating another row. Changes to setup used by the protected row or its loop still trigger an integrity finding.

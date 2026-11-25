@@ -4,6 +4,7 @@
 # so a green run can't hide an integration that silently stopped running.
 
 # Real test runners
+all internal/author TestAmbiguousJavaScriptSelectorExplainsSuiteName
 all internal/author TestSharedTableCallbackPrioritizesItsRow
 all internal/check TestIntegrityGoTableTracksReferencedLocalDeclarations
 all internal/check TestIntegrityResolvesNestedGoSubtest

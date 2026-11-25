@@ -390,7 +390,7 @@ func extractPythonDefBlock(src, fnName string) (string, bool) {
 func compareJSTestCase(selector string, trustedBytes, currBytes []byte) (bool, string) {
 	trusted, ok := testcase.JavaScriptCase(trustedBytes, selector)
 	if !ok {
-		return false, fmt.Sprintf("cannot uniquely identify JS/TS test case %q in the trusted version", selector)
+		return false, fmt.Sprintf("cannot uniquely identify JS/TS test case %q in the trusted version. If multiple suites use this name, use the full test name including its suite", selector)
 	}
 	current, ok := testcase.JavaScriptCase(currBytes, trusted.Name)
 	if !ok || current.Name != trusted.Name {
