@@ -10,6 +10,7 @@ All notable changes to Flinch are recorded here. The format follows [Keep a Chan
 
 ### Fixed
 
+- Pytest checks protect the body of a decorated test, and a change to its parameters can nominate the test for reuse.
 - The proved-test notice explains when the case protects later turns in the same checkout and how to share it with CI.
 - `flinch doctor` and `flinch init` report healthy checks even when the event history cannot be read.
 - Stop can return a regression before the fix is committed. A check proven in the clone applies while its record and protected case match at the start of a turn, including after edits to sibling tests. Editing the protected case or deleting its record during that turn triggers an integrity finding.

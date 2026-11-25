@@ -296,30 +296,38 @@ func comparePythonTestCase(selector string, trustedBytes, currBytes []byte) (boo
 func extractPythonDefBlock(src, fnName string) (string, bool) {
 	lines := strings.Split(src, "\n")
 	defRe := regexp.MustCompile(`^(\s*)(?:async\s+)?def\s+` + regexp.QuoteMeta(fnName) + `\s*\(`)
-	start := -1
+	defLine := -1
 	indent := 0
 	for i, l := range lines {
 		if m := defRe.FindStringSubmatch(l); m != nil {
-			start = i
+			defLine = i
 			indent = len(m[1])
-			// Include immediately preceding decorators (@pytest.mark...).
-			for start > 0 && strings.HasPrefix(strings.TrimSpace(lines[start-1]), "@") {
-				start--
-			}
 			break
 		}
 	}
-	if start < 0 {
+	if defLine < 0 {
 		return "", false
 	}
+	if indent == 0 {
+		// Use discovery's bounds for top-level cases, including multiline decorators.
+		for _, r := range testcase.Python("", []byte(src)) {
+			if r.Name == "::"+fnName {
+				return strings.Join(lines[r.Lines.Start-1:r.Lines.End], "\n"), true
+			}
+		}
+	}
+	start := defLine
+	for start > 0 && strings.HasPrefix(strings.TrimSpace(lines[start-1]), "@") {
+		start--
+	}
 	end := len(lines)
-	for i := start + 1; i < len(lines); i++ {
+	for i := defLine + 1; i < len(lines); i++ {
 		trimmed := strings.TrimSpace(lines[i])
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		if len(lines[i])-len(strings.TrimLeft(lines[i], " \t")) <= indent && !strings.HasPrefix(trimmed, "@") && i > start {
-			if strings.HasPrefix(trimmed, "def ") || strings.HasPrefix(trimmed, "async def ") || strings.HasPrefix(trimmed, "class ") || len(lines[i])-len(strings.TrimLeft(lines[i], " \t")) < indent {
+		if len(lines[i])-len(strings.TrimLeft(lines[i], " \t")) <= indent {
+			if strings.HasPrefix(trimmed, "@") || strings.HasPrefix(trimmed, "def ") || strings.HasPrefix(trimmed, "async def ") || strings.HasPrefix(trimmed, "class ") || len(lines[i])-len(strings.TrimLeft(lines[i], " \t")) < indent {
 				end = i
 				break
 			}

@@ -140,6 +140,12 @@ func Python(path string, src []byte) []Region {
 	var out []Region
 	for i := 0; i < len(ts); i++ {
 		start := i
+		for ts[i].col == 0 && ts[i].text == "@" {
+			i = pythonBlockEnd(ts, i)
+			if i == len(ts) {
+				return out
+			}
+		}
 		if ts[i].col == 0 && ts[i].text == "async" && at(ts, i+1) == "def" {
 			i++
 		}
@@ -147,18 +153,24 @@ func Python(path string, src []byte) []Region {
 			continue
 		}
 		name := path + "::" + ts[i+1].text
-		end := i + 1
-		for end < len(ts) && !(ts[end].line > ts[end-1].last && ts[end].col == 0 && ts[end-1].text != "\\") {
-			if ts[end].close >= 0 {
-				end = ts[end].close
-			}
-			end++
-		}
+		end := pythonBlockEnd(ts, i)
 		out = append(out, Region{Name: name, Source: regionText(ts[start:end], true),
 			Lines: gitutil.LineRange{Start: ts[start].line, End: ts[end-1].last}})
 		i = end - 1
 	}
 	return out
+}
+
+// A top-level decorator or definition ends at the next unindented statement.
+func pythonBlockEnd(ts []caseToken, start int) int {
+	end := start + 1
+	for end < len(ts) && !(ts[end].line > ts[end-1].last && ts[end].col == 0 && ts[end-1].text != "\\") {
+		if ts[end].close >= 0 {
+			end = ts[end].close
+		}
+		end++
+	}
+	return end
 }
 
 func literalTitle(word string) string {
