@@ -135,17 +135,18 @@ func FileAtRef(ctx context.Context, repoRoot, ref, relPath string) ([]byte, erro
 	return stdout.Bytes(), nil
 }
 
-// ListTreeFiles returns repo-relative forward-slash file paths under dirPath at ref.
+// ListTreeFiles returns the files directly inside dirPath at ref, with repo-relative paths.
 func ListTreeFiles(ctx context.Context, repoRoot, ref, dirPath string) ([]string, error) {
-	out, _, err := Run(ctx, repoRoot, nil, "ls-tree", "-r", "--name-only", ref, "--", filepath.ToSlash(dirPath))
+	dir := strings.TrimSuffix(filepath.ToSlash(dirPath), "/") + "/"
+	out, _, err := Run(ctx, repoRoot, nil, "ls-tree", "-z", ref, "--", dir)
 	if err != nil {
 		return nil, err
 	}
 	var files []string
-	for _, line := range strings.Split(strings.ReplaceAll(out, "\r\n", "\n"), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if trimmed != "" {
-			files = append(files, filepath.ToSlash(trimmed))
+	for entry := range strings.SplitSeq(out, "\x00") {
+		header, path, ok := strings.Cut(entry, "\t")
+		if ok && strings.Contains(header, " blob ") {
+			files = append(files, path)
 		}
 	}
 	return files, nil
