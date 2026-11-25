@@ -125,6 +125,9 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	for _, n := range notes {
 		fmt.Fprintf(stdout, "  - %s\n", n)
 	}
+	if rep.EventHistoryError != "" {
+		fmt.Fprintf(stdout, "Event history unavailable: %s\n", rep.EventHistoryError)
+	}
 	printCapabilityMatrix(stdout, rep.Capabilities)
 	return 0
 }

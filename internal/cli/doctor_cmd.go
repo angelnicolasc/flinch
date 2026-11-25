@@ -91,6 +91,9 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) int
 			fmt.Fprintf(stdout, "  Last %s turn checked in this clone: %s\n", host.Name, at.Format(time.RFC3339Nano))
 		}
 	}
+	if rep.EventHistoryError != "" {
+		fmt.Fprintf(stdout, "Event history unavailable: %s\n", rep.EventHistoryError)
+	}
 	if inc := rep.LastHookIncident; inc != nil {
 		fmt.Fprintf(stdout, "Last contained hook failure: %s, %s %s during %s (flinch %s). The turn continued without Flinch.\n",
 			inc.Time.Format(time.RFC3339), inc.Host, inc.Event, inc.Stage, inc.Version)

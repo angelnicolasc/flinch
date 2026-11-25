@@ -73,6 +73,7 @@ type Report struct {
 	WorkingTreeChecksError  string                     `json:"working_tree_checks_error,omitempty"`
 	LocallyProvedChecks     int                        `json:"locally_proved_working_tree_checks"`
 	LastTurnChecked         map[string]time.Time       `json:"last_turn_checked_by_host,omitempty"`
+	EventHistoryError       string                     `json:"event_history_error,omitempty"`
 	ProbabilisticGuides     int                        `json:"probabilistic_guides"`
 	UnrecognizedAssertions  int                        `json:"no_recognized_assertion"`
 	CommandApprovalRequired bool                       `json:"command_approval_required"`
@@ -140,7 +141,8 @@ func Run(ctx context.Context, repoRoot string, pruneWorktrees bool) (Report, err
 		}
 		rep.LastTurnChecked, err = stats.NewStore(stateDir).LastTurnsChecked("claude", "codex", "antigravity")
 		if err != nil {
-			return Report{}, err
+			rep.LastTurnChecked = nil
+			rep.EventHistoryError = err.Error()
 		}
 	}
 
