@@ -149,23 +149,29 @@ func findGoDirectSubtest(body *ast.BlockStmt, target string) *ast.CallExpr {
 		if matched != nil {
 			return false
 		}
+		if _, nested := n.(*ast.FuncLit); nested {
+			return false
+		}
 		call, ok := n.(*ast.CallExpr)
-		if !ok || len(call.Args) < 2 {
+		if !ok || len(call.Args) != 2 {
 			return true
 		}
 		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "Run" {
+		callback, hasBody := call.Args[1].(*ast.FuncLit)
+		if !ok || sel.Sel.Name != "Run" || !hasBody {
 			return true
 		}
 		if lit, ok := call.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
 			if unq, err := strconv.Unquote(lit.Value); err == nil {
-				if unq == target || normalizeGoSubtestName(unq) == normTarget {
+				name := normalizeGoSubtestName(unq)
+				if name == normTarget {
 					matched = call
-					return false
+				} else if rest, nested := strings.CutPrefix(normTarget, name+"/"); nested {
+					matched = findGoDirectSubtest(callback.Body, rest)
 				}
 			}
 		}
-		return true
+		return false
 	})
 	return matched
 }
