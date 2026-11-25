@@ -16,12 +16,24 @@ import (
 )
 
 func TestCorrectionProtectsNextTurnWithoutCommit(t *testing.T) {
-	for _, scenario := range []string{"product", "rewrite_and_exhaust", "repair_then_green", "nomination_hunk", "renamed_hunk", "explicit_skip"} {
-		t.Run(scenario, func(t *testing.T) {
+	for _, variant := range []string{"product", "rewrite_and_exhaust", "repair_then_green", "repair_then_green_CRLF", "nomination_hunk", "renamed_hunk", "explicit_skip"} {
+		t.Run(variant, func(t *testing.T) {
 			ctx := context.Background()
 			repo := t.TempDir()
 			testutil.HookProfile(t, repo)
 			fixtureGit(t, repo, "init")
+			scenario := strings.TrimSuffix(variant, "_CRLF")
+			crlf := scenario != variant
+			if crlf {
+				fixtureGit(t, repo, "config", "core.autocrlf", "true")
+			}
+			write := func(path, body string) {
+				t.Helper()
+				if crlf {
+					body = strings.ReplaceAll(body, "\n", "\r\n")
+				}
+				fixtureWrite(t, repo, path, body)
+			}
 			repo, err := gitutil.RepoRoot(ctx, repo)
 			if err != nil {
 				t.Fatal(err)
@@ -82,9 +94,9 @@ func TestRetryDelay(t *testing.T) {
 				// Both names are new in C. Only zero replaces a row added by B.
 				tableC = strings.Replace(tableC, omitted, "{\"additional_zero\", new(int), 0},\n\t\t"+omitted, 1)
 			}
-			fixtureWrite(t, repo, "go.mod", "module example.com/retry\n\ngo 1.26\n")
-			fixtureWrite(t, repo, "retry.go", broken)
-			fixtureWrite(t, repo, "retry_test.go", base)
+			write("go.mod", "module example.com/retry\n\ngo 1.26\n")
+			write("retry.go", broken)
+			write("retry_test.go", base)
 			fixtureCommit(t, repo, "Add retry delay", ".")
 			head := fixtureGit(t, repo, "rev-parse", "HEAD")
 			host := hook.HostClaude
@@ -103,12 +115,12 @@ func TestRetryDelay(t *testing.T) {
 				return records
 			}
 			prompt("Cover an explicit zero delay using the default.")
-			fixtureWrite(t, repo, "retry_test.go", tableB)
+			write("retry_test.go", tableB)
 			if b := stop("Covered the default."); len(b.Stdout) != 0 || len(records()) != 0 {
 				t.Fatalf("B unexpectedly requested work or registered a check: %s", b.Stdout)
 			}
 			prompt("An explicit zero should retry immediately. Keep the default when omitted.")
-			fixtureWrite(t, repo, "retry.go", fixed)
+			write("retry.go", fixed)
 			testPath := "retry_test.go"
 			if scenario == "renamed_hunk" {
 				testPath = "delay_test.go"
@@ -116,7 +128,7 @@ func TestRetryDelay(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			fixtureWrite(t, repo, testPath, tableC)
+			write(testPath, tableC)
 			if scenario == "explicit_skip" {
 				skip := stop("flinch skip: a one-time preference")
 				events := fixtureAuthoringEvents(t, repo)
@@ -153,7 +165,7 @@ func TestRetryDelay(t *testing.T) {
 				return
 			}
 			prompt("Simplify retry delay so nonpositive values use the default.")
-			fixtureWrite(t, repo, "retry.go", strings.Replace(fixed, "d == nil", "d == nil || *d <= 0", 1))
+			write("retry.go", strings.Replace(fixed, "d == nil", "d == nil || *d <= 0", 1))
 			requireBlock := func(last, reason string) {
 				t.Helper()
 				answer := stop(last)
@@ -170,8 +182,9 @@ func TestRetryDelay(t *testing.T) {
 				requireBlock("Changed nonpositive delays to use the default.", "regression test TestRetryDelay/zero failed")
 				// The repair preserves zero and still changes a line introduced in C.
 				// Its new negative case fails on C and would otherwise be reusable.
-				fixtureWrite(t, repo, "retry.go", strings.Replace(fixed, "d == nil", "d == nil || *d < 0", 1))
-				fixtureWrite(t, repo, testPath, strings.Replace(tableC, zero, zero+"\n\t\t{\"negative\", func() *int { n := -1; return &n }(), 1},", 1))
+				write("retry.go", strings.Replace(fixed, "d == nil", "d == nil || *d < 0", 1))
+				repaired := strings.Replace(tableC, zero, zero+"\n\t\t{\"negative\", func() *int { n := -1; return &n }(), 1},", 1)
+				write(testPath, repaired)
 				if answer := stop("Repaired zero and covered negative delays."); len(answer.Stdout) != 0 {
 					t.Fatalf("a successful repair reopened authoring: %s", answer.Stdout)
 				}
@@ -179,8 +192,18 @@ func TestRetryDelay(t *testing.T) {
 				if !cp.Closed || cp.TotalContinuations != 1 || cp.AuthoringAttempted || len(fixtureAuthoringEvents(t, repo)) != len(events) || len(records()) != 1 {
 					t.Fatalf("the repair nominated or registered another case: %+v", cp)
 				}
+				prompt("Restore the default for zero and update its expected delay.")
+				write("retry.go", strings.Replace(fixed, "d == nil", "d == nil || *d <= 0", 1))
+				write(testPath, strings.Replace(repaired, zero, wrong, 1))
+				answer := stop("Restored the default for nonpositive delays and updated zero.")
+				var response struct{ Decision, Reason string }
+				err := json.Unmarshal(answer.Stdout, &response)
+				inverse, readErr := reflex.LocalProof(ctx, repo, registered[0], "")
+				if err != nil || response.Decision != "block" || !strings.Contains(response.Reason, "protected table test case TestRetryDelay/zero was modified") || readErr != nil || inverse.VerifiedForCheckout() || len(fixtureAuthoringEvents(t, repo)) != len(events) || len(records()) != 1 {
+					t.Fatalf("E must protect the original zero case: response=%s, decode=%v, inverse=%+v, read=%v", answer.Stdout, err, inverse, readErr)
+				}
 			case "rewrite_and_exhaust":
-				fixtureWrite(t, repo, "retry_test.go", tableB)
+				write("retry_test.go", tableB)
 				events := fixtureAuthoringEvents(t, repo)
 				requireBlock("Updated the implementation and its expectation.", "protected table test case TestRetryDelay/zero was modified")
 				requireBlock("Keeping the new expectation.", "protected table test case TestRetryDelay/zero was modified")
