@@ -220,7 +220,10 @@ jobs:
           set -euo pipefail
           go run ./scripts/installblock -marker windows-archive -lang powershell docs/install.md > "$RUNNER_TEMP/install.ps1"
           repo="$RUNNER_TEMP/smoke-repo" && git init -q "$repo" && cd "$repo"
-          USERPROFILE="$SMOKE_HOME" HOME="$SMOKE_HOME" LOCALAPPDATA="$SMOKE_HOME/local" pwsh -NoProfile -File "$RUNNER_TEMP/install.ps1"
+          export USERPROFILE="$SMOKE_HOME" HOME="$SMOKE_HOME" LOCALAPPDATA="$SMOKE_HOME/local"
+          powershell -NoProfile -File "$RUNNER_TEMP/install.ps1"
+          test -f "$LOCALAPPDATA/Flinch/bin/flinch.exe"
+          powershell -NoProfile -File "$RUNNER_TEMP/install.ps1"
           echo "FLINCH=$SMOKE_HOME/local/Flinch/bin/flinch.exe" >> "$GITHUB_ENV"
 
       - name: Install with Homebrew

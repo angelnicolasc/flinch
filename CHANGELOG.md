@@ -4,6 +4,10 @@ All notable changes to Flinch are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Changed
+
+- The weekly Windows archive check runs the documented installation twice with Windows PowerShell 5.1 to cover both a fresh installation and an upgrade.
+
 ## [0.1.2] - 2026-11-25
 
 ### Fixed
