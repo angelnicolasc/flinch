@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/angelnicolasc/flinch/internal/author"
 	"github.com/angelnicolasc/flinch/internal/check"
@@ -15,7 +16,7 @@ import (
 	"github.com/angelnicolasc/flinch/internal/gitutil"
 	"github.com/angelnicolasc/flinch/internal/reflex"
 	"github.com/angelnicolasc/flinch/internal/runner"
-	"time"
+	"github.com/angelnicolasc/flinch/internal/stats"
 )
 
 // CapabilityState mirrors the verifiable onboarding matrix states.
@@ -67,6 +68,11 @@ type Report struct {
 	ContextFiles            []string                   `json:"context_files,omitempty"`
 	Capabilities            CapabilityMatrix           `json:"capabilities"`
 	DeterministicReflexes   int                        `json:"deterministic_checks"`
+	TrustedChecks           int                        `json:"trusted_checks"`
+	WorkingTreeOnlyChecks   int                        `json:"working_tree_only_checks"`
+	WorkingTreeChecksError  string                     `json:"working_tree_checks_error,omitempty"`
+	LocallyProvedChecks     int                        `json:"locally_proved_working_tree_checks"`
+	LastTurnChecked         map[string]time.Time       `json:"last_turn_checked_by_host,omitempty"`
 	ProbabilisticGuides     int                        `json:"probabilistic_guides"`
 	UnrecognizedAssertions  int                        `json:"no_recognized_assertion"`
 	CommandApprovalRequired bool                       `json:"command_approval_required"`
@@ -132,17 +138,45 @@ func Run(ctx context.Context, repoRoot string, pruneWorktrees bool) (Report, err
 		if err != nil {
 			return Report{}, err
 		}
+		rep.LastTurnChecked, err = stats.NewStore(stateDir).LastTurnsChecked("claude", "codex", "antigravity")
+		if err != nil {
+			return Report{}, err
+		}
 	}
 
-	reflexes, _ := reflex.LoadAll(repoRoot)
+	trusted, err := check.LoadTrustedReflexes(ctx, repoRoot, cfg.Executor.TrustedRef)
+	if err != nil {
+		return Report{}, err
+	}
+	trustedIDs := make(map[string]bool, len(trusted))
+	for _, r := range trusted {
+		trustedIDs[r.ID] = true
+		if r.IsDeterministic() {
+			rep.TrustedChecks++
+		}
+	}
+	reflexes, err := reflex.LoadAll(repoRoot)
+	if err != nil {
+		rep.WorkingTreeChecksError = err.Error()
+	}
 	rep.CommandApprovalRequired = runner.CommandsNeedApproval(ctx, repoRoot, cfg, reflexes)
 	hasActiveCI := false
 	hasRequiredMergeBlock := false
 	hasActiveTurn := false
 
+	hasLocalState := stateDir != "" && exists(stateDir)
 	for _, r := range reflexes {
 		if r.IsDeterministic() {
 			rep.DeterministicReflexes++
+			if !trustedIDs[r.ID] {
+				rep.WorkingTreeOnlyChecks++
+				if hasLocalState {
+					proof, err := reflex.LocalProof(ctx, repoRoot, r, "")
+					if err == nil && proof.VerifiedForCheckout() {
+						rep.LocallyProvedChecks++
+					}
+				}
+			}
 		} else {
 			rep.ProbabilisticGuides++
 		}
@@ -179,7 +213,7 @@ func Run(ctx context.Context, repoRoot string, pruneWorktrees bool) (Report, err
 		rep.ReflexHealth = append(rep.ReflexHealth, rh)
 	}
 
-	rep.Capabilities = buildCapabilityMatrix(cfg, cfgPresent, tools, workflows, hasActiveCI, hasRequiredMergeBlock, hasActiveTurn)
+	rep.Capabilities = buildCapabilityMatrix(cfg, cfgPresent, tools, workflows, hasActiveCI, hasRequiredMergeBlock, hasActiveTurn, len(rep.LastTurnChecked) > 0)
 	return rep, nil
 }
 
@@ -188,7 +222,7 @@ func buildCapabilityMatrix(
 	cfgPresent bool,
 	tools map[string]runner.ToolInfo,
 	workflows []string,
-	hasActiveCI, hasRequiredMergeBlock, hasActiveTurn bool,
+	hasActiveCI, hasRequiredMergeBlock, hasActiveTurn, hasObservedHostTurn bool,
 ) CapabilityMatrix {
 	var m CapabilityMatrix
 	policySource := "repository defaults"
@@ -200,6 +234,8 @@ func buildCapabilityMatrix(
 	hasHost := tools["claude"].Available || tools["codex"].Available || tools["antigravity"].Available
 	if !tools["git"].Available {
 		m.LocalCapture = CapabilityEntry{State: CapUnavailable, Detail: "git binary not found in PATH"}
+	} else if hasObservedHostTurn {
+		m.LocalCapture = CapabilityEntry{State: CapEnabledAndTested, Detail: "A host hook checked a turn in this clone."}
 	} else if hasHost {
 		m.LocalCapture = CapabilityEntry{State: CapAvailableUntested, Detail: "Git and a supported agent host detected. Hook execution has not been verified."}
 	} else {

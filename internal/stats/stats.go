@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"time"
 )
@@ -86,6 +87,42 @@ func (s *Store) Record(ev Event) error {
 	return err
 }
 
+func (s *Store) readEvents(visit func(Event)) error {
+	f, err := os.Open(s.path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	defer f.Close()
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var ev Event
+		if err := json.Unmarshal(line, &ev); err != nil {
+			continue
+		}
+		visit(ev)
+	}
+	return scanner.Err()
+}
+
+// LastTurnsChecked returns the latest recorded turn check for each requested host.
+func (s *Store) LastTurnsChecked(hosts ...string) (map[string]time.Time, error) {
+	last := make(map[string]time.Time)
+	err := s.readEvents(func(ev Event) {
+		if ev.Kind == EventTurnChecked && slices.Contains(hosts, ev.Surface) && ev.Timestamp.After(last[ev.Surface]) {
+			last[ev.Surface] = ev.Timestamp.UTC()
+		}
+	})
+	return last, err
+}
+
 // Summarize computes a denominator-preserving Summary from the local log.
 func (s *Store) Summarize(deterministicCount, probabilisticCount int, scopeLabel string) (Summary, error) {
 	if scopeLabel == "" {
@@ -97,27 +134,8 @@ func (s *Store) Summarize(deterministicCount, probabilisticCount int, scopeLabel
 		DeterministicReflexes: deterministicCount,
 		ProbabilisticGuides:   probabilisticCount,
 	}
-
-	f, err := os.Open(s.path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return sum, nil
-		}
-		return sum, err
-	}
-	defer f.Close()
-
 	var latencies []int64
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		var ev Event
-		if err := json.Unmarshal(line, &ev); err != nil {
-			continue
-		}
+	err := s.readEvents(func(ev Event) {
 		ts := ev.Timestamp
 		if sum.FirstEventAt == nil || ts.Before(*sum.FirstEventAt) {
 			tCopy := ts
@@ -146,8 +164,8 @@ func (s *Store) Summarize(deterministicCount, probabilisticCount int, scopeLabel
 		case EventCheckSkipped:
 			sum.SkippedChecks++
 		}
-	}
-	if err := scanner.Err(); err != nil {
+	})
+	if err != nil {
 		return sum, err
 	}
 

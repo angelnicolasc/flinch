@@ -14,6 +14,8 @@ all internal/reflex TestRecordIndexPreservesConcurrentProofsOfDifferentArtifacts
 all internal/check TestTurnChecksSuppressionsAgainstReviewedAndOpeningRefs
 all internal/check TestTurnEnforcesProvenCheckoutChecks/LF
 all internal/check TestTurnEnforcesProvenCheckoutChecks/CRLF
+all internal/author TestReuseFirstProvesNewlyAddedGoTableRowWithoutContinuation
+all internal/author TestReuseFirstProvesConfiguredLintRuleWithInScopeNeighbor
 all internal/author TestMissingAssertionReachesDoctorFromBothStopPaths
 all internal/author TestReuseRecognizesRealAssertionForms
 all internal/author TestRealAssertionControlsAvoidFalseProof
@@ -36,6 +38,9 @@ all internal/e2e TestCIIntegrityAgainstPullRequestBase/product_fix
 all internal/e2e TestCIIntegrityAgainstPullRequestBase/missing_base
 all internal/e2e TestCIUsesDirectCheckRecordsFromGit/unicode
 all internal/e2e TestCIUsesDirectCheckRecordsFromGit/archived
+
+# Doctor reads reviewed records and the clone's host event log
+all internal/cli TestDoctorReportsCheckSourcesAndLastHostTurns
 
 # Real linters through the production adapters
 all internal/runner TestRealGolangCILintReportsAndClears

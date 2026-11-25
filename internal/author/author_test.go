@@ -163,6 +163,9 @@ func TestRetryDelay(t *testing.T) {
 	if outcome.Neighbor != "TestRetryDelay/omitted_uses_default" {
 		t.Fatalf("unexpected neighbor: %s", outcome.Neighbor)
 	}
+	if !strings.Contains(outcome.SummaryLine, "Flinch checks the next turn if its opening snapshot contains this record and the proved test. Commit the record, test and fix to share it with other checkouts and CI running Flinch.") {
+		t.Fatalf("test proof notice omitted activation instructions: %s", outcome.SummaryLine)
+	}
 	if _, err := os.Stat(filepath.Join(repo, ".flinch", "checks", outcome.Reflex.ID+".yml")); err != nil {
 		t.Fatalf("expected saved reflex file: %v", err)
 	}
@@ -262,5 +265,8 @@ func TestReuseFirstProvesConfiguredLintRuleWithInScopeNeighbor(t *testing.T) {
 	}
 	if outcome.Reflex.Artifact.Tool != "go-vet" || outcome.Reflex.Artifact.Rule != "printf" {
 		t.Fatalf("unexpected lint reflex artifact: %+v", outcome.Reflex.Artifact)
+	}
+	if !strings.Contains(outcome.SummaryLine, "Flinch checks the next turn if its opening snapshot contains this record and the proved rule. Commit the record, rule and fix to share it with other checkouts and CI running Flinch.") {
+		t.Fatalf("lint proof notice omitted activation instructions: %s", outcome.SummaryLine)
 	}
 }

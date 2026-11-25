@@ -30,7 +30,7 @@ func TestDoctorUsesEffectiveDefaultsWithoutTOML(t *testing.T) {
 		{"opencode", CapUnavailable},
 	} {
 		tools := map[string]runner.ToolInfo{"git": {Available: true}, tc.host: {Available: true}}
-		matrix := buildCapabilityMatrix(effective, false, tools, nil, false, false, false)
+		matrix := buildCapabilityMatrix(effective, false, tools, nil, false, false, false, false)
 		if matrix.TurnEnforcement.State != tc.want || matrix.CandidatePreparation.State != tc.want {
 			t.Errorf("capabilities for %s without TOML: %+v", tc.host, matrix)
 		}

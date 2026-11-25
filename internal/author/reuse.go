@@ -217,7 +217,7 @@ func ReuseFirst(ctx context.Context, repoRoot string, cfg config.Config, brokenR
 				Report:                 &rep,
 				Neighbor:               cand.NeighborSelector,
 				UnrecognizedAssertions: unrecognized,
-				SummaryLine:            fmt.Sprintf("flinch: proved test %s (%s; neighbor %s passed)", cand.Selector, id, cand.NeighborSelector),
+				SummaryLine:            fmt.Sprintf("flinch: proved test %s (%s; neighbor %s passed). Flinch checks the next turn if its opening snapshot contains this record and the proved test. Commit the record, test and fix to share it with other checkouts and CI running Flinch.", cand.Selector, id, cand.NeighborSelector),
 			}, nil
 		}
 		hadInconclusive = true
@@ -876,7 +876,7 @@ func reuseConfiguredLint(ctx context.Context, repoRoot string, cfg config.Config
 				Reflex:      &r,
 				Report:      &rep,
 				Neighbor:    neighborPath,
-				SummaryLine: fmt.Sprintf("flinch: proved lint rule %s/%s (%s; neighbor %s passed)", lc.Kind, ruleID, id, neighborPath),
+				SummaryLine: fmt.Sprintf("flinch: proved lint rule %s/%s (%s; neighbor %s passed). Flinch checks the next turn if its opening snapshot contains this record and the proved rule. Commit the record, rule and fix to share it with other checkouts and CI running Flinch.", lc.Kind, ruleID, id, neighborPath),
 			}, true
 		}
 	}

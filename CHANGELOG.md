@@ -14,6 +14,10 @@ All notable changes to Flinch are recorded here. The format follows [Keep a Chan
 
 - `flinch check --ci --base` reports a deleted check record from the PR base and exits with status 1. Previously, CI looked for records in the proposed checkout, so deleting a record also removed it from the integrity check.
 
+### Changed
+
+- `flinch doctor` distinguishes checks in the trusted revision from working-tree records and shows how many of those records have a local proof. It reports the last turn each host checked in the clone. A proof notice explains when the check applies locally and how to share it with other checkouts and CI.
+
 ## [0.1.2] - 2026-11-25
 
 ### Fixed

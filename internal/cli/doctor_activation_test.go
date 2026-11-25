@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +12,11 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/angelnicolasc/flinch/internal/gitutil"
+	"github.com/angelnicolasc/flinch/internal/reflex"
+	"github.com/angelnicolasc/flinch/internal/stats"
 )
 
 func TestClonePermissionCommandAndDiagnostics(t *testing.T) {
@@ -50,6 +56,130 @@ func TestClonePermissionCommandAndDiagnostics(t *testing.T) {
 				t.Fatalf("after %s expected %s %s:\n%s", step.action, host, expected, diagnosis)
 			}
 		}
+	}
+}
+
+func TestDoctorReportsCheckSourcesAndLastHostTurns(t *testing.T) {
+	isolateSetupHome(t)
+	repo := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	git("init", "-q")
+	run := func(args ...string) string {
+		t.Helper()
+		var out, stderr bytes.Buffer
+		if rc := Run(context.Background(), append([]string{"doctor", "--repo", repo}, args...), &out, &stderr); rc != 0 {
+			t.Fatalf("doctor exited %d: %s", rc, stderr.String())
+		}
+		return out.String()
+	}
+	type diagnosis struct {
+		Disk         int                  `json:"deterministic_checks"`
+		Trusted      int                  `json:"trusted_checks"`
+		Local        int                  `json:"working_tree_only_checks"`
+		Proved       int                  `json:"locally_proved_working_tree_checks"`
+		TreeError    string               `json:"working_tree_checks_error"`
+		Last         map[string]time.Time `json:"last_turn_checked_by_host"`
+		Capabilities map[string]struct {
+			State string `json:"state"`
+		} `json:"capabilities"`
+	}
+	checkCounts := func(disk, trusted, local, proved int) diagnosis {
+		t.Helper()
+		raw := run("--json")
+		var got diagnosis
+		if err := json.Unmarshal([]byte(raw), &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.TreeError != "" || got.Disk != disk || got.Trusted != trusted || got.Local != local || got.Proved != proved {
+			t.Fatalf("expected disk=%d trusted=%d local=%d proved=%d: %s", disk, trusted, local, proved, raw)
+		}
+		return got
+	}
+	save := func(id, verifiedRef string, proof *reflex.ProofSummary) string {
+		t.Helper()
+		path, err := reflex.SaveContext(context.Background(), repo, reflex.Reflex{
+			ID: id, Version: 1, Obligation: "Use the configured format string.", Rung: reflex.RungLint,
+			Artifact: reflex.Artifact{Tool: "go-vet", Rule: "printf"}, Proof: proof,
+		}, verifiedRef)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+
+	reviewed := save("reviewed", "", nil)
+	initial := checkCounts(1, 0, 1, 0)
+	if len(initial.Last) != 0 || initial.Capabilities["local_capture"].State == "enabled_and_tested" {
+		t.Fatalf("claimed a hook ran without a host event: %+v", initial)
+	}
+	git("add", ".flinch")
+	git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.org", "-c", "commit.gpgsign=false", "commit", "-qm", "Review check")
+	store := stats.NewStore(filepath.Join(repo, ".git", "flinch"))
+	first := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	record := func(at time.Time, surface string, kind stats.EventKind) {
+		t.Helper()
+		if err := store.Record(stats.Event{Timestamp: at, Surface: surface, Kind: kind}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record(first, "turn", stats.EventTurnChecked) // flinch check --turn
+	record(first, "codex", stats.EventCheckSkipped)
+	committed := checkCounts(1, 1, 0, 0)
+	if len(committed.Last) != 0 || committed.Capabilities["local_capture"].State == "enabled_and_tested" {
+		t.Fatalf("counted a manual check or a skip as a host turn: %+v", committed)
+	}
+
+	fixed, err := gitutil.ResolveRef(context.Background(), repo, "HEAD")
+	if err != nil {
+		t.Fatal(err)
+	}
+	save("local", fixed, &reflex.ProofSummary{Verdict: "verified"})
+	save("disk-only", "", &reflex.ProofSummary{Verdict: "verified"})
+	save("draft", "", nil)
+	if err := os.Remove(reviewed); err != nil {
+		t.Fatal(err)
+	}
+	second := first.Add(time.Minute)
+	record(second, "claude", stats.EventTurnChecked)
+	record(first, "codex", stats.EventTurnChecked)
+	record(first, "claude", stats.EventTurnChecked)
+	mixed := checkCounts(3, 1, 3, 1)
+	if len(mixed.Last) != 2 || !mixed.Last["claude"].Equal(second) || !mixed.Last["codex"].Equal(first) ||
+		mixed.Capabilities["local_capture"].State != "enabled_and_tested" || mixed.Capabilities["turn_enforcement"].State == "enabled_and_tested" {
+		t.Fatalf("incorrect host evidence or accreditation: %+v", mixed)
+	}
+	out := run()
+	for _, want := range []string{
+		"1 in the trusted revision, 3 only in the working tree (1 locally proved)",
+		"Last claude turn checked in this clone: " + second.Format(time.RFC3339),
+		"Last codex turn checked in this clone: " + first.Format(time.RFC3339),
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("doctor omitted %q:\n%s", want, out)
+		}
+	}
+	if err := os.WriteFile(reviewed, []byte("id: [\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var invalid diagnosis
+	if err := json.Unmarshal([]byte(run("--json")), &invalid); err != nil {
+		t.Fatal(err)
+	}
+	if invalid.Trusted != 1 || !strings.Contains(invalid.TreeError, filepath.Base(reviewed)) ||
+		!invalid.Last["claude"].Equal(second) || invalid.Capabilities["local_capture"].State != "enabled_and_tested" {
+		t.Fatalf("lost diagnostics for a malformed working-tree record: %+v", invalid)
+	}
+	out = run()
+	if !strings.Contains(out, "1 in the trusted revision") || !strings.Contains(out, "Working-tree check counts unavailable:") ||
+		strings.Contains(out, "0 only in the working tree") || strings.Contains(out, "Probabilistic context guides: 0") {
+		t.Fatalf("expected known counts and a working-tree error:\n%s", out)
 	}
 }
 

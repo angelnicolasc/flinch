@@ -173,7 +173,7 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 	}
 	res.TouchedFiles = touched
 
-	reviewed, err := loadTrustedReflexes(tctx, repoRoot, cfg.Executor.TrustedRef)
+	reviewed, err := LoadTrustedReflexes(tctx, repoRoot, cfg.Executor.TrustedRef)
 	if err != nil {
 		if expiredRes, expired := failOpenIfExpired(); expired {
 			return expiredRes, nil
@@ -635,7 +635,7 @@ func RunCI(ctx context.Context, repoRoot string, cfg config.Config, opts CIOptio
 		if ref == "" {
 			ref = cfg.Executor.TrustedRef
 		}
-		reviewed, err := loadTrustedReflexes(ctx, repoRoot, ref)
+		reviewed, err := LoadTrustedReflexes(ctx, repoRoot, ref)
 		if err != nil {
 			return res, err
 		}
@@ -1035,7 +1035,7 @@ func loadVerifiedCheckoutChecks(ctx context.Context, repoRoot, snapshot string, 
 	if snapshot == "" {
 		return nil, nil, nil
 	}
-	atStart, err := loadTrustedReflexes(ctx, repoRoot, snapshot)
+	atStart, err := LoadTrustedReflexes(ctx, repoRoot, snapshot)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1059,7 +1059,8 @@ func loadVerifiedCheckoutChecks(ctx context.Context, repoRoot, snapshot string, 
 	return checks, proofs, nil
 }
 
-func loadTrustedReflexes(ctx context.Context, repoRoot, trustedRef string) ([]reflex.Reflex, error) {
+// LoadTrustedReflexes reads check records from the configured revision, which defaults to HEAD.
+func LoadTrustedReflexes(ctx context.Context, repoRoot, trustedRef string) ([]reflex.Reflex, error) {
 	if strings.TrimSpace(trustedRef) == "" {
 		trustedRef = "HEAD"
 	}

@@ -87,6 +87,9 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) int
 			state = "active"
 		}
 		fmt.Fprintf(stdout, "%s: %s | %s (%s)\n", host.Name, host.Installation, state, host.Reason)
+		if at, ok := rep.LastTurnChecked[host.Name]; ok {
+			fmt.Fprintf(stdout, "  Last %s turn checked in this clone: %s\n", host.Name, at.Format(time.RFC3339Nano))
+		}
 	}
 	if inc := rep.LastHookIncident; inc != nil {
 		fmt.Fprintf(stdout, "Last contained hook failure: %s, %s %s during %s (flinch %s). The turn continued without Flinch.\n",
@@ -104,8 +107,14 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) int
 
 	fmt.Fprintf(stdout, "Repository: %s (head=%s, config=%v, mode=%s)\n",
 		rep.RepoRoot, shortSHA(rep.HeadSHA), rep.ConfigPresent, rep.PolicyMode)
-	fmt.Fprintf(stdout, "Protections: %d deterministic, %d probabilistic context guides\n",
-		rep.DeterministicReflexes, rep.ProbabilisticGuides)
+	if rep.WorkingTreeChecksError != "" {
+		fmt.Fprintf(stdout, "Deterministic checks: %d in the trusted revision\n", rep.TrustedChecks)
+		fmt.Fprintf(stdout, "Working-tree check counts unavailable: %s\n", rep.WorkingTreeChecksError)
+	} else {
+		fmt.Fprintf(stdout, "Deterministic checks: %d in the trusted revision, %d only in the working tree (%d locally proved)\n",
+			rep.TrustedChecks, rep.WorkingTreeOnlyChecks, rep.LocallyProvedChecks)
+		fmt.Fprintf(stdout, "Probabilistic context guides: %d\n", rep.ProbabilisticGuides)
+	}
 	if rep.CommandApprovalRequired {
 		fmt.Fprintln(stdout, runner.CommandPermissionNotice)
 	}
