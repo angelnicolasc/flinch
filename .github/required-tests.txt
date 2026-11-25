@@ -4,6 +4,7 @@
 # so a green run can't hide an integration that silently stopped running.
 
 # Real test runners
+all internal/author TestJavaScriptRegexpInTestFile
 all internal/author TestDecoratedPytestCase
 all internal/author TestCorrectionProtectsNextTurnWithoutCommit/repair_then_green_CRLF
 all internal/cli TestDoctorPreservesHealthyChecksWhenEventHistoryIsUnreadable

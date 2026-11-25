@@ -3,7 +3,6 @@ package testcase
 
 import (
 	"regexp"
-	"slices"
 	"strings"
 
 	"github.com/angelnicolasc/flinch/internal/gitutil"
@@ -34,7 +33,20 @@ var (
 	pythonToken = regexp.MustCompile(`^(?:#[^\n]*|(?s:"""(?:\\.|[^\\])*?"""|'''(?:\\.|[^\\])*?''')|` + quotedStrings + `|` + otherTokens + `)`)
 	jsToken     = regexp.MustCompile(`^(?://[^\n]*|(?s:/\*.*?\*/)|\x60(?:\\[\s\S]|[^\x60\\])*\x60|` + quotedStrings + `|` + otherTokens + `)`)
 	jsRegexp    = regexp.MustCompile(`^/(?:\\[^\r\n]|\[(?:\\[^\r\n]|[^\]\\\r\n])*\]|[^/\\\[\r\n])+/[A-Za-z]*`)
+	jsValue     = regexp.MustCompile(`^[\pL\pN_$'"\x60]`)
 )
+
+// A slash after a value or closing delimiter is division. Keywords that
+// introduce an expression can instead be followed by a regular expression.
+func jsStartsRegexp(previous string) bool {
+	switch previous {
+	case ")", "]", "}":
+		return false
+	case "return", "throw", "case", "delete", "void", "typeof", "instanceof", "in", "new", "yield", "await", "else", "do":
+		return true
+	}
+	return !jsValue.MatchString(previous) && !(len(previous) > 1 && previous[0] == '/')
+}
 
 func lexCaseSource(src string, python bool) []caseToken {
 	lexer := jsToken
@@ -46,7 +58,7 @@ func lexCaseSource(src string, python bool) []caseToken {
 	line, col, offset := 1, 0, 0
 	for len(src) > 0 {
 		word := lexer.FindString(src)
-		if !python && word == "/" && (len(ts) == 0 || slices.Contains([]string{"(", "[", "{", "=", ":", ",", "!", "?", ">", "return", "throw", "case"}, ts[len(ts)-1].text)) {
+		if !python && word == "/" && jsStartsRegexp(at(ts, len(ts)-1)) {
 			if literal := jsRegexp.FindString(src); literal != "" {
 				word = literal
 			}
