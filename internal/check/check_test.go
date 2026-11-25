@@ -208,6 +208,54 @@ func TestIntegrityDetectsSuppressionAndReflexModification(t *testing.T) {
 	}
 }
 
+func TestTurnChecksSuppressionsAgainstReviewedAndOpeningRefs(t *testing.T) {
+	repo, cfg := setupCheckRepo(t)
+	ctx := context.Background()
+	const path = "notes.go"
+	write := func(body string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(repo, path), []byte("package notes\n"+body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("//nolint:old\n")
+	reviewed := commitRepo(t, repo, "Record existing suppression")
+	records, err := reflex.LoadAll(repo)
+	if err != nil || len(records) != 1 {
+		t.Fatalf("expected one reviewed check: %+v, %v", records, err)
+	}
+	local := records[0]
+	local.ID = "checkout-printf"
+	local.Proof = &reflex.ProofSummary{Verdict: "verified", RuntimeMS: 1}
+	if _, err := reflex.SaveContext(ctx, repo, local, reviewed); err != nil {
+		t.Fatal(err)
+	}
+	write("")
+	if _, err := CaptureCheckpoint(ctx, repo, t.Name(), repo, "", "", true); err != nil {
+		t.Fatal(err)
+	}
+	// The first directive is new only against the opening snapshot.
+	// The second is new against both references and should appear once.
+	write("//nolint:old\n// flinch:ignore\n")
+	res, err := RunTurn(ctx, repo, cfg, TurnOptions{SessionID: t.Name(), WorktreeID: repo, CheckIntg: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	counts := map[string]int{}
+	for _, v := range res.IntegrityViolations {
+		if v.Kind == "suppression_added" && v.Path == path {
+			for _, marker := range []string{"//nolint", "flinch:ignore"} {
+				if strings.Contains(v.Detail, marker) {
+					counts[marker]++
+				}
+			}
+		}
+	}
+	if !res.Blocking || len(res.IntegrityViolations) != 2 || counts["//nolint"] != 1 || counts["flinch:ignore"] != 1 {
+		t.Fatalf("both refs must report each new directive once: %+v", res)
+	}
+}
+
 func TestAccreditVerifiesIntegratedSHAAndSeparatesTriggerPendingFromActive(t *testing.T) {
 	repo, cfg := setupCheckRepo(t)
 	ctx := context.Background()

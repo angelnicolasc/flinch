@@ -6,6 +6,7 @@ All notable changes to Flinch are recorded here. The format follows [Keep a Chan
 
 ### Fixed
 
+- Stop detects a suppression restored during a turn even when another check was already committed. A directive added against both the reviewed and opening revisions appears once.
 - `flinch check --ci --base` reports an error before running checks if the requested revision is missing.
 
 - Stop and CI read direct check records from Git, including IDs with non-ASCII characters. Records stored in archive subdirectories stay outside the catalog.

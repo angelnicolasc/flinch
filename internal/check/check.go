@@ -197,16 +197,21 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 	}
 
 	if opts.CheckIntg {
-		suppressionPaths := touched
-		if len(reviewed) > 0 {
-			viols, _ := CheckIntegrity(tctx, repoRoot, cfg.Executor.TrustedRef, reviewed, suppressionPaths)
-			res.IntegrityViolations = append(res.IntegrityViolations, viols...)
-			suppressionPaths = nil // The shared suppression scan runs once.
+		seen := make(map[IntegrityViolation]bool)
+		checkIntegrity := func(ref string, checks []reflex.Reflex) {
+			if len(checks) == 0 {
+				return
+			}
+			viols, _ := CheckIntegrity(tctx, repoRoot, ref, checks, touched)
+			for _, v := range viols {
+				if !seen[v] {
+					res.IntegrityViolations = append(res.IntegrityViolations, v)
+					seen[v] = true
+				}
+			}
 		}
-		if len(checkout) > 0 {
-			viols, _ := CheckIntegrity(tctx, repoRoot, cp.SnapshotSHA, checkout, suppressionPaths)
-			res.IntegrityViolations = append(res.IntegrityViolations, viols...)
-		}
+		checkIntegrity(cfg.Executor.TrustedRef, reviewed)
+		checkIntegrity(cp.SnapshotSHA, checkout)
 	}
 
 	// Compare against the checkout as it was when the human turn opened.
