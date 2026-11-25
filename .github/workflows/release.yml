@@ -28,9 +28,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Run tests
-        run: |
-          go test -count=1 ./...
-          python3 -m unittest discover -s scripts -p 'test_release_manifests.py'
+        run: go test -count=1 ./...
 
       - name: Build archives
         env:
@@ -67,9 +65,9 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            python3 scripts/release_manifests.py "$TAG" dist/checksums.txt "$RUNNER_TEMP/package-manifests"
+            go run ./scripts/releasemanifests "$TAG" dist/checksums.txt "$RUNNER_TEMP/package-manifests"
             ruby -c "$RUNNER_TEMP/package-manifests/Formula/flinch.rb"
-            python3 -m json.tool "$RUNNER_TEMP/package-manifests/flinch.json" > /dev/null
+            jq empty "$RUNNER_TEMP/package-manifests/flinch.json"
             echo "publish=$HAS_PACKAGE_TOKEN" >> "$GITHUB_OUTPUT"
           fi
 
