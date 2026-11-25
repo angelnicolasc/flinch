@@ -204,6 +204,14 @@ process.exit(okCwd ? 0 : 1);
 	if len(jRes.Cases) != 1 || jRes.Cases[0].Outcome != OutcomePass {
 		t.Fatalf("expected passing jest case despite noisy stdout, got %+v", jRes)
 	}
+	// Jest must read file arguments as exact paths, not as patterns that can
+	// match no file or another one.
+	if !strings.Contains(jRes.Command, "--runTestsByPath src/retry.test.ts") {
+		t.Fatalf("Jest received its file as a pattern: %s", jRes.Command)
+	}
+	if strings.Contains(vRes.Command, "--runTestsByPath") {
+		t.Fatalf("Vitest has no --runTestsByPath flag: %s", vRes.Command)
+	}
 }
 
 // Regression test: Candidate commands receive a filtered environment without user secrets.

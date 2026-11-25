@@ -4,6 +4,10 @@ All notable changes to Flinch are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Fixed
+
+- Proofs work when the temp directory has more than one spelling. Flinch named each proof tree after the temp directory as given, but the tools that ran in it reported files by their real path. On Windows, Jest spells out the 8.3 short names that `TEMP` keeps (such as `RUNNER~1`). On macOS, whose `/var` is a symlink, every tool sees the tree without it. Flinch then couldn't match the case and its failure across the broken and the fixed tree, so Jest proofs on Windows, and Go, Jest, Vitest, Ruff and lint proofs on macOS, ended inconclusive. Proof trees are now created at the temp directory's real path. Flinch also passes test files to Jest as exact paths with `--runTestsByPath`, so a file named like `[id].test.ts` matches itself and nothing else.
+
 ## [0.1.1] - 2026-11-25
 
 ### Fixed

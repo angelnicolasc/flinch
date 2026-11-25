@@ -129,12 +129,22 @@ func runJSTestFramework(ctx context.Context, kind, repoRoot, proofRoot string, t
 	if pattern := BuildJSTestNameRegex(selector); pattern != "" {
 		args = append(args, "-t", pattern)
 	}
+	var files []string
 	for _, tgt := range targets {
 		relToPkg := targetRelativeToPkg(proofRoot, pkgDir, tgt)
 		if relToPkg != "" {
-			args = append(args, filepath.ToSlash(relToPkg))
+			files = append(files, filepath.ToSlash(relToPkg))
 		}
 	}
+	// Jest otherwise reads each file argument as a regular expression over
+	// absolute paths: "app/[id].test.ts" matches no file, and
+	// "src/retry.test.ts" also matches "lib/src/retry.test.ts".
+	// --runTestsByPath takes the arguments as exact paths and still applies
+	// the project's testPathIgnorePatterns.
+	if kind == "jest" && len(files) > 0 {
+		args = append(args, "--runTestsByPath")
+	}
+	args = append(args, files...)
 
 	tctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()

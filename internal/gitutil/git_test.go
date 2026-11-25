@@ -164,6 +164,32 @@ func TestWorktreeLifecycle(t *testing.T) {
 // Regression test: Snapshot capture and proof-tree materialization must succeed
 // even when a repository installs a strict reference-transaction hook rejecting unsigned
 // commits or worktree HEAD ref updates.
+// Tools report the files in a proof tree by their real path, so the tree is
+// created there even when the temp directory is reached through a symlink.
+func TestProofTreeLivesAtTheRealTempPath(t *testing.T) {
+	repo := initTestRepo(t)
+	alias := filepath.Join(t.TempDir(), "tmp-alias")
+	if err := os.Symlink(t.TempDir(), alias); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"TMPDIR", "TMP", "TEMP"} {
+		t.Setenv(name, alias)
+	}
+	ctx := context.Background()
+	wt, err := CreateWorktree(ctx, repo, "HEAD", "real-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer wt.Cleanup(ctx)
+	real, err := filepath.EvalSymlinks(wt.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wt.Path != real {
+		t.Fatalf("proof tree %s is not at its real path %s", wt.Path, real)
+	}
+}
+
 func TestSnapshotAndMaterializeRespectStrictReferenceTransactionHook(t *testing.T) {
 	repo := initTestRepo(t)
 	ctx := context.Background()

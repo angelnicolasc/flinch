@@ -185,7 +185,21 @@ func proofScratchPath(stateDir, name string) string {
 		identity = strings.ToLower(identity)
 	}
 	key := sha256.Sum256([]byte(identity))
-	return filepath.Join(os.TempDir(), fmt.Sprintf("flinch-proof-%x-%s", key[:12], name))
+	return filepath.Join(realTempDir(), fmt.Sprintf("flinch-proof-%x-%s", key[:12], name))
+}
+
+// realTempDir is the system temp directory by its real path. A proof
+// compares the paths a tool reports with the tree's own path, and tools
+// report the real one: on macOS and Linux a process sees its working
+// directory without the symlinks in TMPDIR (macOS's /var is one), Jest
+// resolves every file, and on Windows the real path spells out the 8.3 short
+// names that TEMP keeps (C:\Users\RUNNER~1).
+func realTempDir() string {
+	dir := os.TempDir()
+	if real, err := filepath.EvalSymlinks(dir); err == nil {
+		return real
+	}
+	return dir
 }
 
 // PruneProofTree removes a known proof tree only while holding its owner's lease.
