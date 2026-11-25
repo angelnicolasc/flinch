@@ -4,6 +4,35 @@ Your agent makes a mistake and you correct it. A week later, another session mak
 
 Flinch turns the correction into a test or lint rule in your repository and proves it fails on the original mistake before keeping it. From then on, it runs that check at the end of every turn that touches the same code. The check lives in your own test suite or lint config, so it also runs in CI and in clones that never installed Flinch. Flinch ships hook adapters for Claude Code, Codex and Antigravity.
 
+## Install
+
+Paste this into Claude Code, Codex or Antigravity:
+
+```text
+Install Flinch for my user account using docs/install.md from
+https://github.com/angelnicolasc/flinch. Select the release archive for my OS
+and architecture, verify its SHA-256, and install the binary at a stable path.
+Run flinch setup --plan and show me its complete output. Wait for my
+confirmation before running flinch setup --yes. Then run flinch doctor.
+```
+
+Setup installs user hooks once. From then on, Flinch acts only in repositories your agent already trusts. Where a host keeps no trust record, such as the Antigravity App, run `flinch enable` once in that clone. The first time Flinch acts in a repository, Claude Code and Codex show one line: `flinch: active in this repo · flinch pause to turn it off`. [Hosts and workspace trust](docs/hosts.md)
+
+With Homebrew or Scoop:
+
+```sh
+brew install angelnicolasc/tap/flinch
+flinch setup
+```
+
+```powershell
+scoop bucket add angelnicolasc https://github.com/angelnicolasc/scoop-bucket
+scoop install angelnicolasc/flinch
+flinch setup
+```
+
+`flinch setup` shows the files and hook commands it will write and asks before it changes anything. Every release publishes SHA-256 checksums next to its archives, and [docs/install.md](docs/install.md) shows how to verify them. Teams that want the hook settings committed to the repository can use `flinch init --shared --hooks <host>`.
+
 ## Why
 
 - Agents repeat mistakes across sessions, branches and teammates.
@@ -42,22 +71,6 @@ Review the test and the record together with the fix. If any later session chang
 
 Most turns show you nothing. When Flinch proves a test the agent already wrote, Claude Code and Codex get a one-line message that names the check. When the fix contains nothing reusable, Flinch asks the agent once to add a protection, or to reply `flinch skip: <reason>` if the correction was a one-off.
 
-## Try it
-
-Download the binary for your platform from the [latest release](https://github.com/angelnicolasc/flinch/releases/latest) and put it on your `PATH`. Every release publishes SHA-256 checksums next to its binaries. If you have Go 1.26, you can also install it with:
-
-```sh
-go install github.com/angelnicolasc/flinch/cmd/flinch@latest
-```
-
-Run `flinch version` to confirm. Then, in the project where you use your agent, run:
-
-```sh
-flinch init --hooks claude   # or: codex, antigravity
-```
-
-`init` merges the hooks into the project's settings (`.claude/settings.json`, `.codex/hooks.json` or `.agents/hooks.json`) and keeps existing entries. It reads runner defaults from your project's manifests, writes only the settings that differ from them, and enables the repository's command checks for this clone. Because those settings files belong to the project, teammates who share them also need Flinch on their `PATH`. Then work as usual.
-
 ## What counts as a check
 
 - **Proof.** Tests and command guards fail on the original mistake in two independent runs and pass on the fix, along with a legitimate neighbor. Static analyzers are deterministic, so they run once per revision.
@@ -76,15 +89,19 @@ Each decision has an ADR that covers the alternatives Flinch rejected and what t
 - **Every hook runs on one deadline.** Stop gets 30 seconds and a turn gets at most two continuations. When time runs out, the turn finishes. ([ADR 0009](docs/adr/0009-budget-each-hook-and-let-the-turn-finish-when-time-runs-out.md))
 - **A weakened check still shows up.** Records load from the reviewed revision, so deleting or loosening a protected test during a turn becomes a finding. ([ADR 0010](docs/adr/0010-keep-the-reviewed-check-in-the-comparison.md))
 - **One engine, three hosts.** Claude Code, Codex and Antigravity share the same proof and enforcement. Each adapter only translates its host's events. ([ADR 0012](docs/adr/0012-share-the-engine-and-adapt-to-each-hosts-turn-lifecycle.md))
+- **Install once, act only where trust exists.** Setup installs user hooks after one review. Before it reads project settings, every hook checks the host's saved trust for the workspace, or a `flinch enable` grant for the clone. A repository can never grant itself access. ([ADR 0013](docs/adr/0013-install-once-per-user-and-act-only-in-trusted-workspaces.md))
 
 ## Commands
 
 ```sh
-flinch doctor                 # hosts, discovered tools and local diagnostics
+flinch setup                  # review and install the user hooks; --remove detaches them
+flinch doctor                 # hooks, workspace trust and discovered tools for this checkout
+flinch enable                 # allow Claude Code and Antigravity in this clone; flinch disable revokes it
+flinch allow-commands         # approve the repository's own command checks after reviewing them
+flinch pause                  # turn Flinch off in this clone; flinch resume turns it back on
 flinch prove --spec candidate.yml --json
 flinch check --ci             # run the reviewed checks in CI
 flinch report <id> --at src/retry.ts:42 --reason "Zero is valid here"
-flinch pause                  # stop capture in this clone; flinch resume turns it back on
 ```
 
 Set `FLINCH=off` to turn Flinch off for a single session.
@@ -93,7 +110,9 @@ Checkpoints, logs and local measurements live under the Git directory. Your work
 
 ## Documentation
 
-- [How Flinch works](docs/design.md): the loop, all twelve decisions and what Flinch doesn't do.
+- [Install Flinch](docs/install.md): release archives, checksums, package managers and removal.
+- [Hosts and workspace trust](docs/hosts.md): what setup installs in each host and when its hooks act.
+- [How Flinch works](docs/design.md): the loop, all thirteen decisions and what Flinch doesn't do.
 - [Architecture decision records](docs/adr/): the context, alternatives and consequences of each decision.
 - [Trust model and operating limits](docs/limitations.md): what Flinch runs on your machine, and with what access.
 
