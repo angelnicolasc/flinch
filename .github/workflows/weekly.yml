@@ -54,8 +54,11 @@ jobs:
         run: |
           set -euo pipefail
           read -r pkg name <<< "$TARGET"
-          # A renamed target would otherwise pass by fuzzing nothing.
-          go test "./$pkg" -list "^${name}\$" | grep -qx "$name" || { echo "::error::$name is not in $pkg"; exit 1; }
+          # A renamed target would otherwise pass by fuzzing nothing. The list
+          # is read whole first: grep -q stops at its match, and under pipefail
+          # go test's SIGPIPE from the next line would fail the check.
+          targets=$(go test "./$pkg" -list "^${name}\$")
+          grep -qx "$name" <<< "$targets" || { echo "::error::$name is not in $pkg"; exit 1; }
           go test "./$pkg" -run '^$' -fuzz "^${name}\$" -fuzztime 60s
 
       # Every input below testdata/fuzz is synthetic, made by the fuzzer.
@@ -136,7 +139,7 @@ jobs:
           {
             echo "### Latest $TOOL on $RUNNER_OS"
             echo '```'
-            pytest --version 2>&1 | head -1
+            pytest --version 2>&1 | sed -n 1p
             ruff --version
             echo "vitest $("$bin/vitest$ext" --version)"
             echo "jest $("$bin/jest$ext" --version)"
