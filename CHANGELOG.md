@@ -4,6 +4,8 @@ All notable changes to Flinch are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-25
+
 ### Fixed
 
 - A failure inside a hook no longer reaches the host as an error. A panic used to exit with status 2, which Claude Code and Codex treat as a request to block the prompt or keep the agent working. The hook now answers with the host's allow response and exit code 0, sends its answer at most once, and records the last contained failure for `flinch doctor`.
@@ -30,5 +32,6 @@ First public release. Claude Code, Codex and Antigravity support is in Preview.
 - Check records under `.flinch/checks/`, checked against the trusted revision so that a deleted or weakened check is reported.
 - `flinch doctor`, `pause`, `resume`, `skip`, `report`, `check --ci` and `prove`.
 
-[Unreleased]: https://github.com/angelnicolasc/flinch/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/angelnicolasc/flinch/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/angelnicolasc/flinch/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/angelnicolasc/flinch/releases/tag/v0.1.0
