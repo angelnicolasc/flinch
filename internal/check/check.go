@@ -91,7 +91,7 @@ type AccreditOptions struct {
 	Timeout          time.Duration
 }
 
-// RunTurn evaluates trusted active reflexes over changes made during the current turn,
+// RunTurn evaluates reviewed and locally verified checks over changes made during the current turn,
 // applying baseline occurrence diffing, integrity checks, a single unified deadline
 // covering startup through completion, and shared continuation/test budgets.
 func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnOptions) (Result, error) {
@@ -173,15 +173,21 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 	}
 	res.TouchedFiles = touched
 
-	// Load ONLY reflexes present in the trusted revision so proposed rules stay isolated and deleted records stay visible.
-	reflexes, err := loadTrustedReflexes(tctx, repoRoot, cfg.Executor.TrustedRef)
+	reviewed, err := loadTrustedReflexes(tctx, repoRoot, cfg.Executor.TrustedRef)
 	if err != nil {
 		if expiredRes, expired := failOpenIfExpired(); expired {
 			return expiredRes, nil
 		}
 		return res, err
 	}
-	if len(reflexes) == 0 {
+	checkout, checkoutProofs, err := loadVerifiedCheckoutChecks(tctx, repoRoot, cp.SnapshotSHA, reviewed)
+	if err != nil {
+		if expiredRes, expired := failOpenIfExpired(); expired {
+			return expiredRes, nil
+		}
+		return res, err
+	}
+	if len(reviewed) == 0 && len(checkout) == 0 {
 		res.DurationMS = time.Since(start).Milliseconds()
 		return res, nil
 	}
@@ -191,9 +197,15 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 	}
 
 	if opts.CheckIntg {
-		viols, intgErr := CheckIntegrity(tctx, repoRoot, cfg.Executor.TrustedRef, reflexes, touched)
-		if intgErr == nil && len(viols) > 0 {
-			res.IntegrityViolations = viols
+		suppressionPaths := touched
+		if len(reviewed) > 0 {
+			viols, _ := CheckIntegrity(tctx, repoRoot, cfg.Executor.TrustedRef, reviewed, suppressionPaths)
+			res.IntegrityViolations = append(res.IntegrityViolations, viols...)
+			suppressionPaths = nil // The shared suppression scan runs once.
+		}
+		if len(checkout) > 0 {
+			viols, _ := CheckIntegrity(tctx, repoRoot, cp.SnapshotSHA, checkout, suppressionPaths)
+			res.IntegrityViolations = append(res.IntegrityViolations, viols...)
 		}
 	}
 
@@ -234,7 +246,7 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 	}
 	testBudgetDirty := false
 
-	for _, r := range reflexes {
+	for _, r := range append(reviewed, checkout...) {
 		if errors.Is(tctx.Err(), context.DeadlineExceeded) {
 			res.SkippedControls = append(res.SkippedControls, SkippedControl{
 				ReflexID: r.ID,
@@ -267,10 +279,16 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 
 		switch r.EffectiveRung() {
 		case reflex.RungTest:
-			localProof, err := reflex.LocalProof(tctx, repoRoot, r)
-			if err != nil {
-				res.SkippedControls = append(res.SkippedControls, SkippedControl{ReflexID: r.ID, Reason: "could not read local test measurement"})
-				continue
+			localProof := checkoutProofs[r.ID]
+			artifactRef := ""
+			if localProof != nil {
+				artifactRef = cp.SnapshotSHA
+			} else {
+				localProof, err = reflex.LocalProof(tctx, repoRoot, r, "")
+				if err != nil {
+					res.SkippedControls = append(res.SkippedControls, SkippedControl{ReflexID: r.ID, Reason: "could not read local test measurement"})
+					continue
+				}
 			}
 			if localProof != nil && time.Duration(localProof.RuntimeMS)*time.Millisecond > maxTestDur {
 				res.SkippedControls = append(res.SkippedControls, SkippedControl{
@@ -306,7 +324,12 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 					res.SkippedControls = append(res.SkippedControls, SkippedControl{ReflexID: r.ID, Reason: "no qualifying fast pass at the turn checkpoint"})
 					continue
 				}
-				if err := reflex.SaveLocalProof(tctx, repoRoot, r, reflex.ProofSummary{RuntimeMS: elapsed}); err != nil {
+				measurement := reflex.ProofSummary{}
+				if localProof != nil {
+					measurement = *localProof
+				}
+				measurement.RuntimeMS = elapsed
+				if err := reflex.SaveLocalProof(tctx, repoRoot, r, measurement, artifactRef); err != nil {
 					continue
 				}
 				measuredBaseline = &calibration
@@ -1006,6 +1029,35 @@ func FormatSARIF(res Result) ([]byte, error) {
 	return json.MarshalIndent(doc, "", "  ")
 }
 
+// A record from the opening snapshot can participate only with a local proof
+// of that same record and artifact. A reviewed ID always owns its contract.
+func loadVerifiedCheckoutChecks(ctx context.Context, repoRoot, snapshot string, reviewed []reflex.Reflex) ([]reflex.Reflex, map[string]*reflex.ProofSummary, error) {
+	if snapshot == "" {
+		return nil, nil, nil
+	}
+	atStart, err := loadTrustedReflexes(ctx, repoRoot, snapshot)
+	if err != nil {
+		return nil, nil, err
+	}
+	reviewedIDs := make(map[string]bool, len(reviewed))
+	for _, r := range reviewed {
+		reviewedIDs[r.ID] = true
+	}
+	var checks []reflex.Reflex
+	proofs := make(map[string]*reflex.ProofSummary)
+	for _, r := range atStart {
+		if reviewedIDs[r.ID] || !r.IsDeterministic() {
+			continue
+		}
+		proof, err := reflex.LocalProof(ctx, repoRoot, r, snapshot)
+		if err == nil && proof != nil && proof.Verdict == string(prove.VerdictVerified) {
+			checks = append(checks, r)
+			proofs[r.ID] = proof
+		}
+	}
+	return checks, proofs, nil
+}
+
 func loadTrustedReflexes(ctx context.Context, repoRoot, trustedRef string) ([]reflex.Reflex, error) {
 	if strings.TrimSpace(trustedRef) == "" {
 		trustedRef = "HEAD"
@@ -1014,8 +1066,7 @@ func loadTrustedReflexes(ctx context.Context, repoRoot, trustedRef string) ([]re
 		// A missing revision provides no reviewed records.
 		return nil, nil
 	}
-	// Enumerate and parse reflexes directly from trustedRef so deleted records remain visible
-	// to integrity checks and unreviewed working-tree reflexes stay isolated.
+	// Read the records from this revision so working-tree deletions stay visible.
 	files, err := gitutil.ListTreeFiles(ctx, repoRoot, trustedRef, reflex.ReflexesRelDir)
 	if err != nil {
 		return nil, err

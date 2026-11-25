@@ -1,6 +1,7 @@
 package reflex
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -12,9 +13,18 @@ import (
 	"github.com/angelnicolasc/flinch/internal/gitutil"
 )
 
-// A measurement belongs to this checkout's artifact contents and reviewed contract.
-func localProofPath(ctx context.Context, repoRoot string, r Reflex) (string, error) {
-	fp, err := r.ComputeFingerprint(repoRoot)
+// Git may store LF for text checked out with CRLF. Use the same bytes for a
+// proof made on disk and one looked up against a captured tree.
+func localProofArtifact(ctx context.Context, repoRoot string, r Reflex, artifactRef string) ([]byte, error) {
+	data, err := r.artifactBytes(ctx, repoRoot, artifactRef)
+	if bytes.Contains(data, []byte("\r\n")) {
+		data = bytes.ReplaceAll(data, []byte("\r\n"), []byte("\n"))
+	}
+	return data, err
+}
+
+func localProofPath(stateDir string, r Reflex, artifact []byte) (string, error) {
+	fp, err := r.fingerprint(artifact)
 	if err != nil {
 		return "", err
 	}
@@ -29,15 +39,31 @@ func localProofPath(ctx context.Context, repoRoot string, r Reflex) (string, err
 		return "", err
 	}
 	sum := sha256.Sum256(key)
-	dir, err := gitutil.FlinchStateDir(ctx, repoRoot)
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "proofs", hex.EncodeToString(sum[:])+".json"), nil
+	return filepath.Join(stateDir, "proofs", hex.EncodeToString(sum[:])+".json"), nil
 }
 
-func LocalProof(ctx context.Context, repoRoot string, r Reflex) (*ProofSummary, error) {
-	path, err := localProofPath(ctx, repoRoot, r)
+// LocalProof reads the measurement of this record and the artifact at artifactRef.
+// An empty reference reads the working copy.
+func LocalProof(ctx context.Context, repoRoot string, r Reflex, artifactRef string) (*ProofSummary, error) {
+	artifact, err := localProofArtifact(ctx, repoRoot, r, artifactRef)
+	if err != nil {
+		return nil, err
+	}
+	stateDir, err := gitutil.FlinchStateDir(ctx, repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	proof, err := readLocalProof(stateDir, r, artifact)
+	if err != nil || proof != nil || !bytes.Contains(artifact, []byte("\n")) {
+		return proof, err
+	}
+	// Earlier releases hashed the raw working copy. Its LF key already
+	// matches; also recognize a receipt written for a CRLF checkout.
+	return readLocalProof(stateDir, r, bytes.ReplaceAll(artifact, []byte("\n"), []byte("\r\n")))
+}
+
+func readLocalProof(stateDir string, r Reflex, artifact []byte) (*ProofSummary, error) {
+	path, err := localProofPath(stateDir, r, artifact)
 	if err != nil {
 		return nil, err
 	}
@@ -55,8 +81,16 @@ func LocalProof(ctx context.Context, repoRoot string, r Reflex) (*ProofSummary, 
 	return &proof, nil
 }
 
-func SaveLocalProof(ctx context.Context, repoRoot string, r Reflex, proof ProofSummary) error {
-	path, err := localProofPath(ctx, repoRoot, r)
+func SaveLocalProof(ctx context.Context, repoRoot string, r Reflex, proof ProofSummary, artifactRef string) error {
+	artifact, err := localProofArtifact(ctx, repoRoot, r, artifactRef)
+	if err != nil {
+		return err
+	}
+	stateDir, err := gitutil.FlinchStateDir(ctx, repoRoot)
+	if err != nil {
+		return err
+	}
+	path, err := localProofPath(stateDir, r, artifact)
 	if err != nil {
 		return err
 	}

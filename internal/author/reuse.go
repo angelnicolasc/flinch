@@ -208,7 +208,7 @@ func ReuseFirst(ctx context.Context, repoRoot string, cfg config.Config, brokenR
 					ReportHash:    rep.CandidateHash,
 				},
 			}
-			if _, saveErr := reflex.SaveContext(ctx, repoRoot, r); saveErr != nil {
+			if _, saveErr := reflex.SaveContext(ctx, repoRoot, r, rep.FixedRef); saveErr != nil {
 				return ReuseOutcome{Status: ReuseInconclusive, Reason: fmt.Sprintf("could not register proven check: %v", saveErr), UnrecognizedAssertions: unrecognized}, nil
 			}
 			return ReuseOutcome{
@@ -868,7 +868,7 @@ func reuseConfiguredLint(ctx context.Context, repoRoot string, cfg config.Config
 					ReportHash:    rep.CandidateHash,
 				},
 			}
-			if _, saveErr := reflex.SaveContext(ctx, repoRoot, r); saveErr != nil {
+			if _, saveErr := reflex.SaveContext(ctx, repoRoot, r, rep.FixedRef); saveErr != nil {
 				return ReuseOutcome{Status: ReuseInconclusive, Reason: saveErr.Error()}, true
 			}
 			return ReuseOutcome{

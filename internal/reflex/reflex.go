@@ -269,6 +269,39 @@ func (r Reflex) Validate() error {
 // ComputeFingerprint calculates a deterministic SHA-256 hash covering the reflex contract
 // and, when present on disk under repoRoot, the referenced artifact file bytes.
 func (r Reflex) ComputeFingerprint(repoRoot string) (string, error) {
+	data, err := r.artifactBytes(context.Background(), repoRoot, "")
+	if err != nil {
+		return "", err
+	}
+	return r.fingerprint(data)
+}
+
+func (r Reflex) artifactBytes(ctx context.Context, repoRoot, ref string) ([]byte, error) {
+	if repoRoot == "" || r.Artifact.Path == "" {
+		return nil, nil
+	}
+	if ref != "" {
+		data, err := gitutil.FileAtRef(ctx, repoRoot, ref, r.Artifact.Path)
+		if err == nil && data == nil {
+			return []byte{}, nil
+		}
+		return data, err
+	}
+	path, err := gitutil.LocalPath(repoRoot, r.Artifact.Path)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read artifact %s: %w", r.Artifact.Path, err)
+	}
+	return data, nil
+}
+
+func (r Reflex) fingerprint(data []byte) (string, error) {
 	payload := struct {
 		ID          string   `json:"id"`
 		Version     int      `json:"version"`
@@ -288,19 +321,9 @@ func (r Reflex) ComputeFingerprint(repoRoot string) (string, error) {
 		Artifact:   r.Artifact,
 	}
 
-	if repoRoot != "" && r.Artifact.Path != "" {
-		artPath, err := gitutil.LocalPath(repoRoot, r.Artifact.Path)
-		if err != nil {
-			return "", err
-		}
-		data, err := os.ReadFile(artPath)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("read artifact %s: %w", r.Artifact.Path, err)
-		}
-		if err == nil {
-			sum := sha256.Sum256(data)
-			payload.ArtifactSHA = hex.EncodeToString(sum[:])
-		}
+	if data != nil {
+		sum := sha256.Sum256(data)
+		payload.ArtifactSHA = hex.EncodeToString(sum[:])
 	}
 
 	b, err := json.Marshal(payload)
@@ -372,11 +395,11 @@ func LoadAll(repoRoot string) ([]Reflex, error) {
 
 // Save adds a stable, reviewed record, preserving existing files and human edits.
 func Save(repoRoot string, r Reflex) (string, error) {
-	return SaveContext(context.Background(), repoRoot, r)
+	return SaveContext(context.Background(), repoRoot, r, "")
 }
 
-// SaveContext stops publication when the caller's verification budget expires.
-func SaveContext(ctx context.Context, repoRoot string, r Reflex) (string, error) {
+// SaveContext binds proof to the verified tree and stops publication when the budget expires.
+func SaveContext(ctx context.Context, repoRoot string, r Reflex, verifiedRef string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -409,7 +432,7 @@ func SaveContext(ctx context.Context, repoRoot string, r Reflex) (string, error)
 				return "", err
 			}
 			if proof != nil {
-				if err := SaveLocalProof(ctx, repoRoot, r, *proof); err != nil {
+				if err := SaveLocalProof(ctx, repoRoot, r, *proof, verifiedRef); err != nil {
 					return "", err
 				}
 			}
@@ -434,7 +457,7 @@ func SaveContext(ctx context.Context, repoRoot string, r Reflex) (string, error)
 		return "", err
 	}
 	if proof != nil {
-		if err := SaveLocalProof(ctx, repoRoot, r, *proof); err != nil {
+		if err := SaveLocalProof(ctx, repoRoot, r, *proof, verifiedRef); err != nil {
 			return "", err
 		}
 	}

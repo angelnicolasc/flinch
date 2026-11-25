@@ -56,6 +56,7 @@ Every step has a deadline. When time runs out, or Flinch cannot tell whether a f
 - [0009. Budget each hook and let the turn finish when time runs out](adr/0009-budget-each-hook-and-let-the-turn-finish-when-time-runs-out.md): one deadline per hook and a fixed continuation budget.
 - [0010. Keep the reviewed check in the comparison](adr/0010-keep-the-reviewed-check-in-the-comparison.md): checks load from the trusted revision, so weakening one shows up.
 - [0011. Keep state local and out of the working tree](adr/0011-keep-state-local-and-out-of-the-working-tree.md): the diff carries the contract, and everything else stays under the Git directory.
+- [0014. Enforce locally proven checks from the turn snapshot](adr/0014-enforce-locally-proven-checks-from-the-turn-snapshot.md). The next turn can use a verified check present when the developer submitted the prompt.
 
 **Hosts**
 - [0012. Share the engine and adapt to each host's turn lifecycle](adr/0012-share-the-engine-and-adapt-to-each-hosts-turn-lifecycle.md): one engine, with thin adapters for Claude Code, Codex and Antigravity.
