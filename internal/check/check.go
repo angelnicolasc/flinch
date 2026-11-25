@@ -579,6 +579,13 @@ func RunCI(ctx context.Context, repoRoot string, cfg config.Config, opts CIOptio
 		Decision: DecisionAllow,
 	}
 
+	if opts.BaseRef != "" {
+		base, err := gitutil.ResolveRef(ctx, repoRoot, opts.BaseRef)
+		if err != nil {
+			return res, fmt.Errorf("resolve CI base %q: %w", opts.BaseRef, err)
+		}
+		opts.BaseRef = base
+	}
 	reflexes, err := reflex.LoadAll(repoRoot)
 	if err != nil {
 		return res, err

@@ -23,6 +23,7 @@ all internal/e2e TestCIIntegrityAgainstPullRequestBase/weakened_row
 all internal/e2e TestCIIntegrityAgainstPullRequestBase/deleted_record
 all internal/e2e TestCIIntegrityAgainstPullRequestBase/added_suppression
 all internal/e2e TestCIIntegrityAgainstPullRequestBase/product_fix
+all internal/e2e TestCIIntegrityAgainstPullRequestBase/missing_base
 all internal/e2e TestCIUsesDirectCheckRecordsFromGit/unicode
 all internal/e2e TestCIUsesDirectCheckRecordsFromGit/archived
 

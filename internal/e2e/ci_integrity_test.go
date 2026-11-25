@@ -58,6 +58,14 @@ cases:
 `)
 	base := gitCommit(t, baseRepo, "Protect immediate retries")
 
+	t.Run("missing base", func(t *testing.T) {
+		var stdout, stderr bytes.Buffer
+		code := cli.Run(ctx, []string{"check", "--ci", "--repo", baseRepo, "--base", "missing-history", "--format", "json"}, &stdout, &stderr)
+		if code == 0 || !strings.Contains(stderr.String(), "missing-history") || stdout.Len() != 0 {
+			t.Fatalf("expected an error naming the missing base, got exit %d, stdout=%s, stderr=%s", code, &stdout, &stderr)
+		}
+	})
+
 	for _, tc := range []struct {
 		name, path, kind string
 	}{

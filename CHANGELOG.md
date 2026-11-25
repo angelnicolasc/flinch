@@ -6,6 +6,8 @@ All notable changes to Flinch are recorded here. The format follows [Keep a Chan
 
 ### Fixed
 
+- `flinch check --ci --base` reports an error before running checks if the requested revision is missing.
+
 - Stop and CI read direct check records from Git, including IDs with non-ASCII characters. Records stored in archive subdirectories stay outside the catalog.
 
 - `flinch check --ci --base` reports a deleted check record from the PR base and exits with status 1. Previously, CI looked for records in the proposed checkout, so deleting a record also removed it from the integrity check.
