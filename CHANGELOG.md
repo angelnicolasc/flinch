@@ -10,6 +10,7 @@ All notable changes to Flinch are recorded here. The format follows [Keep a Chan
 
 ### Fixed
 
+- TypeScript table tests with nested or function type arguments retain their row selectors.
 - JavaScript regular expressions after logical operators or a semicolon no longer conceal tests during discovery or integrity checks.
 - Pytest checks protect the body of a decorated test, and a change to its parameters can nominate the test for reuse.
 - The proved-test notice explains when the case protects later turns in the same checkout and how to share it with CI.

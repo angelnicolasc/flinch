@@ -266,10 +266,17 @@ func javaScriptRegions(src string, contents func([]caseToken) string) []Region {
 		if at(ts, open) == "." && at(ts, open+1) == "each" {
 			open += 2
 			if at(ts, open) == "<" {
-				for open < len(ts) && ts[open].text != ">" {
-					open++
-				}
 				open++
+				for depth := 1; open < len(ts) && depth > 0; open++ {
+					switch ts[open].text {
+					case "<":
+						depth++
+					case ">":
+						if at(ts, open-1) != "=" { // The arrow in a function type does not close a generic.
+							depth--
+						}
+					}
+				}
 			}
 			if at(ts, open) != "(" || at(ts, open+1) != "[" {
 				continue
