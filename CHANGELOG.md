@@ -4,6 +4,10 @@ All notable changes to Flinch are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-25
+
+First public release. Claude Code, Codex and Antigravity support is in Preview.
+
 ### Added
 
 - Hook adapters for Claude Code, Codex and Antigravity, installed once per user with `flinch setup`. Setup shows the files and commands it will change before it writes them, and `flinch setup --remove` detaches them.
@@ -17,3 +21,6 @@ All notable changes to Flinch are recorded here. The format follows [Keep a Chan
 - End-of-turn enforcement that blocks only on findings the turn introduced, with one deadline per hook and a fixed continuation budget.
 - Check records under `.flinch/checks/`, checked against the trusted revision so that a deleted or weakened check is reported.
 - `flinch doctor`, `pause`, `resume`, `skip`, `report`, `check --ci` and `prove`.
+
+[Unreleased]: https://github.com/angelnicolasc/flinch/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/angelnicolasc/flinch/releases/tag/v0.1.0
