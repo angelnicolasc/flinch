@@ -27,6 +27,8 @@ CI installs the versions it tests against, listed in [`.github/workflows/ci.yml`
 |---|---|
 | `cmd/flinch` | CLI entry point |
 | `internal/hook` | Host adapters for Claude Code, Codex and Antigravity |
+| `internal/usersetup` | User hook registration, removal and installation consent |
+| `internal/workspacetrust` | Read-only workspace and trust checks shared by hooks and diagnostics |
 | `internal/author` | Nominating corrections and reusing the agent's test as a check |
 | `internal/prove` | Proving a candidate check against the broken code, the fix and an allowed case |
 | `internal/check` | End-of-turn and CI enforcement |

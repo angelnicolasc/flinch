@@ -1,12 +1,41 @@
 # Trust model and operating limits
 
-Flinch runs your repository's own test and lint commands on your machine, with your user's permissions. Enabling it in a repository is like running that repository's test suite. `flinch init` enables the repository's command and script checks only for the clone where you run it, and each other clone needs its own `init`.
+User setup grants Flinch permission to run the repository's tests and linters with your user account in an authorized checkout. The host's per-command approval does not apply to those child processes. Flinch's hook engine makes no network requests. A test or linter can use the network and access files available to your account.
 
-| Boundary | Behavior | Guidance |
+## Workspace trust
+
+Flinch checks authorization on every event before reading project settings, creating Git objects, or writing state. Missing consent, an unknown or ambiguous checkout, a clone pause, and `FLINCH=off` all leave the hook inactive. `flinch doctor` reports the current directory and `flinch doctor --all` also lists checkouts where a user hook previously captured a turn.
+
+| Host | What authorizes the event |
+| --- | --- |
+| Claude Code | A positive saved trust entry for the main checkout, a Desktop session whose project directory belongs to the event's clone, or an explicit clone grant. Registered linked worktrees share the clone. An independent nested repository needs its own authorization. |
+| Codex | A positive saved user entry for the event's exact directory. A saved profile can revoke it. Managed configuration, system requirements, managed preferences, a cached organization policy, or failure to inspect those sources disables activation. |
+| Antigravity | A saved `trustedWorkspaces` entry for the checkout or an explicit clone grant. The App and IDE can lack a saved entry. Activity is visible in `flinch doctor`. |
+
+After reviewing a clone, run `flinch enable` there to grant access to Claude Code and Antigravity. `flinch disable` removes the grant, but trust saved in the host still applies. A clone pause takes precedence over both.
+
+### Claude Code Desktop
+
+The Desktop marker identifies the session, not the folder. It counts only when the event's checkout belongs to the same clone as the session's `CLAUDE_PROJECT_DIR`, so a `cd` into an independent checkout leaves that checkout inactive. A child `claude -p` process inherits the marker and has its own project directory. When both refer to the same clone, the Desktop check can activate the child. Whether a child session can be told apart from its parent is still being verified on Desktop builds. [Claude hook working directories](https://code.claude.com/docs/en/hooks#reference-scripts-by-path)
+
+### Codex
+
+Flinch requires a user entry for the event's exact directory and follows Codex 0.172.0's lookup order: the canonical path first, then the original spelling. For each key an exact match wins. On Windows, the lexicographically smallest key that matches under ASCII case folding wins otherwise. [Codex project lookup](https://github.com/openai/codex/blob/3d86e43b075adeba2193ec5c22ac92f55afd82e6/codex-rs/config/src/loader/mod.rs#L1621-L1659)
+
+Flinch reads organization policy from the copy Codex saves on disk, under the active Codex home. A cached configuration or requirements fragment disables Flinch, even when it names the same key as a user grant. A nonempty bundle cached from a previous policy server keeps Flinch inactive too. If Codex applies a policy it could not save, Flinch can't see it. In that case, when the cache is missing or still holds an empty bundle, Flinch follows the user's saved trust. [Codex cache publication](https://github.com/openai/codex/blob/3d86e43b075adeba2193ec5c22ac92f55afd82e6/codex-rs/cloud-config/src/service.rs#L382-L406)
+
+| User trust | Session opens in | Result when other checks pass |
 | --- | --- | --- |
-| Child processes | Tests and linters run with the access of the Flinch process. The host's per-tool sandbox and permission prompts don't automatically apply to them. | Enable Flinch in repositories whose test suite you would run yourself. |
-| Repository commands | Command and script checks defined in the repository run only in a clone where `flinch init` enabled them. | Review changes under `.flinch/checks/` like any other code that runs on your machine. |
-| Filesystem links | Flinch validates repository-relative paths lexically. A symbolic link, junction or Windows reparse point in a path can redirect a file operation. | Keep check artifacts, fixtures and state in ordinary directories. |
-| File permissions | Flinch replaces a file by writing a temporary file first. The replacement takes that file's mode under the operating system's creation policy, so an existing file's permission bits can change. | If a settings file needs special permissions, check them after `init`. |
-| Installing several hosts | Flinch configures the hosts one by one. If a later host fails, the changes made for earlier hosts stay on disk. | Fix the reported error and run `init` again. Existing settings are kept. |
-| Snapshot objects | Turn snapshots are ordinary Git objects. Clearing Flinch's local state leaves them to Git's normal maintenance. | Nothing to do: `git gc` prunes them once they are unreferenced and old enough. |
+| Repository root only | A subdirectory | Inactive. Open the session at the trusted repository root. |
+| Exact directory, with a cached organization policy | That directory | Inactive, including when both layers use an identical key. |
+| Repository root | That root | Active. |
+
+A hook receives neither one-session flags nor the effective profile selected only for that session. Flinch follows persisted trust. To disable Flinch for a stricter session, launch the host with `FLINCH=off`. [Hook input at 0.172.0](https://github.com/openai/codex/blob/3d86e43b075adeba2193ec5c22ac92f55afd82e6/codex-rs/hooks/src/events/user_prompt_submit.rs#L81-L94)
+
+## Local execution and storage
+
+- **Repository commands.** Review command definitions, script files and any programs they call before granting `flinch allow-commands` in the clone. Changing the command or its directly identified script bytes invalidates the grant. Claude Code and Codex show the approval notice once per distinct content in the clone. Put shell expansions and indirect program selection in a named script and invoke it by its literal repository path. For an unregistered proof candidate, use `flinch allow-commands --spec <file>`. Tests, linters and transitive dependencies still execute with your permissions. `flinch doctor` reports pending command approvals even on hosts without a passive message channel.
+- **Filesystem links.** Some artifact paths are validated lexically. Symlinks, junctions or Windows reparse points can redirect file operations. Keep artifacts, fixtures and state in ordinary directories.
+- **Shared settings.** A team can distribute hook definitions through `flinch init --shared --hooks <host>`. Each developer still needs user consent and authorization for the clone. With both registrations present, the host can launch both commands. The shared command yields to the user handler for the matching event, including its host review and filters.
+- **Snapshots.** Turn snapshots are ordinary Git objects. Git maintenance can prune unreferenced objects after its configured grace period.
+- **Recordings.** Setting `FLINCH_RECORD=1` records active deliveries under `flinch/recordings/` in the Git common directory. Recordings use per-clone aliases for IDs, text and paths. They retain event timing, correlation and decision shape. After a trial, turn recording off, review the JSON before sharing, and remove the trial recordings. Keep the separate private recording key local.

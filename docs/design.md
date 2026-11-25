@@ -59,6 +59,7 @@ Every step has a deadline. When time runs out, or Flinch cannot tell whether a f
 
 **Hosts**
 - [0012. Share the engine and adapt to each host's turn lifecycle](adr/0012-share-the-engine-and-adapt-to-each-hosts-turn-lifecycle.md): one engine, with thin adapters for Claude Code, Codex and Antigravity.
+- [0013. Install once per user and act only in trusted workspaces](adr/0013-install-once-per-user-and-act-only-in-trusted-workspaces.md): one reviewed install, and hooks act only where the host or the developer trusts the clone.
 
 ## What Flinch doesn't do
 

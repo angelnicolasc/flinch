@@ -15,7 +15,7 @@ Two details came up while building the adapters. Antigravity ends a normal turn 
 
 ## Decision
 
-One Go engine handles all proof and enforcement. Each adapter identifies the session, opens the turn checkpoint and translates the engine's answer into the host's format. `flinch init --hooks <host>` installs the adapter in the project's hook settings and keeps existing entries, including a customized or disabled Antigravity group.
+One Go engine handles all proof and enforcement. Each adapter checks the workspace trust gate, identifies the session, opens the turn checkpoint and translates the engine's answer into the host's format. `flinch setup` installs the adapters as user hooks, and `flinch init --shared --hooks <host>` adds them to a project's settings for teams that share them. [ADR 0013](0013-install-once-per-user-and-act-only-in-trusted-workspaces.md)
 
 | Host | Sending the agent back at Stop | Notice for a proven check already in the fix |
 | --- | --- | --- |
@@ -35,5 +35,6 @@ A host can change its event format without changing how Flinch proves a check. R
 ## In the code
 
 - [`internal/hook/hook.go`](../../internal/hook/hook.go): `Handle`, `handleTurnStart` and `handleStop` translate lifecycle events, and `continueResponse` writes each host's decision.
-- [`internal/hook/install.go`](../../internal/hook/install.go): `InstallHooks` merges the settings.
+- [`internal/usersetup/hooks.go`](../../internal/usersetup/hooks.go): renders each host's user hook.
+- [`internal/hook/install.go`](../../internal/hook/install.go): `InstallHooks` merges shared project settings.
 - [`internal/cli/hook_cmd.go`](../../internal/cli/hook_cmd.go): the `flinch hook` entry point.

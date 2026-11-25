@@ -12,9 +12,10 @@ A teammate reviewing a check needs the assertion, the selector and the legitimat
 
 Flinch keeps two kinds of state, in two places:
 - **Reviewed state** lives in `.flinch/checks/<id>.yml`, which holds the stable contract: tool, file, selector, neighbor, scope and surfaces. Proving a check again keeps the file's bytes, comments included. `flinch init` writes only the settings that differ from the defaults.
-- **Local state** lives under `flinch/` in the Git common directory, which linked worktrees share. It covers checkpoints, event logs, proof leases and measurements. Each local proof summary is bound to a fingerprint of the check and its artifact. Snapshots are Git objects, and replays run in the system temp folder.
+- **Local state** lives under `flinch/` in the Git common directory, which linked worktrees share. It covers checkpoints, event logs, proof leases, measurements and the clone's pause and grant. Each local proof summary is bound to a fingerprint of the check and its artifact. Snapshots are Git objects, and replays run in the system temp folder.
+- **User state** lives in the user's Flinch configuration directory: the setup consent and the list of checkouts where a hook has acted. Nothing in a repository can supply it. [ADR 0013](0013-install-once-per-user-and-act-only-in-trusted-workspaces.md)
 
-By default, a checkpoint stores a hash of the prompt, not its text. Keeping redacted text requires opting in.
+By default, a checkpoint stores a hash of the prompt, not its text. Keeping redacted text requires opting in. A recording trial with `FLINCH_RECORD=1` adds sanitized event files under `flinch/recordings/`.
 
 Tool caches stay out of the checkout too:
 - pytest runs with its cache provider off;

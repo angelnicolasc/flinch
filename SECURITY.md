@@ -12,13 +12,14 @@ Include the Flinch version, your operating system, the host and the steps to rep
 
 ## What Flinch runs on your machine
 
-Flinch runs your repository's own test and lint commands, locally and with your user's permissions. Command and script checks defined by a repository run only in a clone where `flinch init` enabled them. The engine makes no network calls of its own and stores its state under the repository's Git directory. [Trust model and operating limits](docs/limitations.md) describes the boundaries in detail.
+After setup, Flinch's user hooks run a checkout's own tests and linters with your user's permissions, and only where the host trusts the workspace or you ran `flinch enable`. Command and script checks defined by the repository also need your approval in that clone with `flinch allow-commands`, bound to their contents. Flinch's hook engine makes no network calls of its own, but the tests and linters it runs keep their network access. Flinch stores its state under the repository's Git directory and your user configuration directory. [Trust model and operating limits](docs/limitations.md) describes the boundaries in detail.
 
 ## Scope
 
 In scope:
+- a repository that makes Flinch act in a workspace the host doesn't trust and the developer never enabled;
 - a path that escapes the repository or Flinch's state directory;
-- a repository command that runs in a clone that never enabled commands;
+- a repository command that runs in a clone that never approved it, or after its contents changed;
 - a way for a turn to delete or weaken a reviewed check without Flinch reporting it;
 - prompt or session data written somewhere other than the documented state.
 
