@@ -76,6 +76,7 @@ jobs:
       - name: Write release notes
         env:
           TAG: ${{ github.ref_name }}
+          PRIVATE_REPO: ${{ github.event.repository.private }}
         run: |
           set -euo pipefail
           version=${TAG#v}
@@ -88,7 +89,12 @@ jobs:
             echo "CHANGELOG.md has no section for $version" >&2
             exit 1
           fi
-          printf '\n### Verify the download\n\nCompare each archive with `checksums.txt` (SHA-256). To confirm where an archive was built, run `gh attestation verify <archive> --repo %s`.\n\nThe macOS binaries are not notarized. After extracting, run `xattr -d com.apple.quarantine flinch` once before the first run.\n' "$GITHUB_REPOSITORY" >> notes.md
+          # The attestation step runs only for a public repository, so only then do the notes mention it.
+          printf '\n### Verify the download\n\nCompare each archive with `checksums.txt` (SHA-256).' >> notes.md
+          if [ "$PRIVATE_REPO" != true ]; then
+            printf ' To confirm where an archive was built, run `gh attestation verify <archive> --repo %s`.' "$GITHUB_REPOSITORY" >> notes.md
+          fi
+          printf '\n\nThe macOS binaries are not notarized. After extracting, run `xattr -d com.apple.quarantine flinch` once before the first run.\n' >> notes.md
 
       - name: Attest build provenance
         if: ${{ !github.event.repository.private }}
