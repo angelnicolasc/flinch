@@ -4,20 +4,19 @@ All notable changes to Flinch are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Changed
+
+- `flinch doctor` distinguishes checks in the trusted revision from working-tree records and shows how many of those records have a local proof. It reports the last turn each host checked in the clone. A proof notice explains when the check applies locally and how to share it with other checkouts and CI.
+
 ### Fixed
 
+- The proved-test notice explains when the case protects later turns in the same checkout and how to share it with CI.
 - `flinch doctor` and `flinch init` report healthy checks even when the event history cannot be read.
 - Stop can return a regression before the fix is committed. A check proven in the clone applies while its record and protected case match at the start of a turn, including after edits to sibling tests. Editing the protected case or deleting its record during that turn triggers an integrity finding.
 - Stop detects a suppression restored during a turn even when another check was already committed. A directive added against both the reviewed and opening revisions appears once.
 - `flinch check --ci --base` reports an error before running checks if the requested revision is missing.
-
 - Stop and CI read direct check records from Git, including IDs with non-ASCII characters. Records stored in archive subdirectories stay outside the catalog.
-
 - `flinch check --ci --base` reports a deleted check record from the PR base and exits with status 1. Previously, CI looked for records in the proposed checkout, so deleting a record also removed it from the integrity check.
-
-### Changed
-
-- `flinch doctor` distinguishes checks in the trusted revision from working-tree records and shows how many of those records have a local proof. It reports the last turn each host checked in the clone. A proof notice explains when the check applies locally and how to share it with other checkouts and CI.
 
 ## [0.1.2] - 2026-11-25
 

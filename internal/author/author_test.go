@@ -163,7 +163,7 @@ func TestRetryDelay(t *testing.T) {
 	if outcome.Neighbor != "TestRetryDelay/omitted_uses_default" {
 		t.Fatalf("unexpected neighbor: %s", outcome.Neighbor)
 	}
-	if !strings.Contains(outcome.SummaryLine, "Flinch checks the next turn if its opening snapshot contains this record and the proved test. Commit the record, test and fix to share it with other checkouts and CI running Flinch.") {
+	if !strings.Contains(outcome.SummaryLine, "It protects later turns in this checkout while this test case stays as proved. Commit the record, the test and the fix to protect other checkouts and CI.") {
 		t.Fatalf("test proof notice omitted activation instructions: %s", outcome.SummaryLine)
 	}
 	if _, err := os.Stat(filepath.Join(repo, ".flinch", "checks", outcome.Reflex.ID+".yml")); err != nil {
