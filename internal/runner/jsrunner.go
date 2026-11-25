@@ -44,7 +44,7 @@ type jsAssertionResult struct {
 
 // BuildJSTestNameRegex converts a full test name such as "retryDelay › uses explicit zero"
 // or "retryDelay > uses explicit zero" into an anchored regex matching Vitest/Jest fullName,
-// accounting for Vitest 3.x single-quoted $var interpolations in test.each titles (D9).
+// accounting for Vitest 3.x single-quoted $var interpolations in test.each titles.
 func BuildJSTestNameRegex(selector string) string {
 	sel := strings.TrimSpace(selector)
 	if sel == "" {
@@ -74,13 +74,13 @@ func BuildJSTestNameRegex(selector string) string {
 }
 
 // RunVitest runs Vitest from the owning workspace package directory, writing structured JSON
-// to a temporary file via `--reporter=json --outputFile` so test stdout cannot corrupt results (D9).
+// to a temporary file via `--reporter=json --outputFile` so test stdout cannot corrupt results.
 func RunVitest(ctx context.Context, repoRoot, proofRoot string, targets []string, selector string, timeout time.Duration) (TestRunResult, error) {
 	return runJSTestFramework(ctx, "vitest", repoRoot, proofRoot, targets, selector, timeout)
 }
 
 // RunJest runs Jest from the owning workspace package directory, writing structured JSON
-// to a temporary file via `--json --outputFile` so test stdout cannot corrupt results (D9).
+// to a temporary file via `--json --outputFile` so test stdout cannot corrupt results.
 func RunJest(ctx context.Context, repoRoot, proofRoot string, targets []string, selector string, timeout time.Duration) (TestRunResult, error) {
 	return runJSTestFramework(ctx, "jest", repoRoot, proofRoot, targets, selector, timeout)
 }
@@ -188,7 +188,7 @@ func runJSTestFramework(ctx context.Context, kind, repoRoot, proofRoot string, t
 }
 
 // ParseJSReportJSON decodes Vitest (`--reporter=json --outputFile`) and Jest (`--json --outputFile`)
-// JSON output into normalized TestCaseResults (D9).
+// JSON output into normalized TestCaseResults.
 func ParseJSReportJSON(data []byte, runnerName string, res *TestRunResult) error {
 	var rep jsJSONReport
 	if err := json.Unmarshal(bytes.TrimSpace(data), &rep); err != nil {
@@ -217,7 +217,7 @@ func ParseJSReportJSON(data []byte, runnerName string, res *TestRunResult) error
 					outcome = OutcomeFail
 				}
 			case "skipped", "pending", "todo", "disabled":
-				// D9: skipped, todo, or filtered-out cases never count as pass.
+				// Skipped, todo, or filtered-out cases never count as pass.
 				outcome = OutcomeSkip
 			default:
 				outcome = OutcomeError
@@ -281,7 +281,7 @@ func looksLikeJSCompileOrLoadError(output string) bool {
 	return false
 }
 
-// findOwningPackageDir walks upward from targetRel inside proofRoot to find the nearest package.json (D9 monorepo support).
+// findOwningPackageDir walks upward from targetRel inside proofRoot to find the nearest package.json (monorepo support).
 func findOwningPackageDir(proofRoot, targetRel string) (absPkgDir string, relPkgDir string) {
 	if targetRel == "" {
 		return proofRoot, ""
@@ -325,7 +325,7 @@ func targetRelativeToPkg(proofRoot, pkgDir, target string) string {
 
 func resolveJSRunnerBinary(kind, pkgDir, proofRoot, repoRoot string) (string, []string, error) {
 	// Prefer invoking the JS CLI entrypoint directly via `node` to avoid Windows .cmd batch
-	// argument mangling of regex characters like '^' and spaces (D9).
+	// argument mangling of regex characters like '^' and spaces.
 	if nodeBin, err := exec.LookPath("node"); err == nil {
 		var entryRel string
 		switch kind {

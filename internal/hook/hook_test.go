@@ -240,7 +240,7 @@ func TestPauseAndEnvDisableFailOpenInHooks(t *testing.T) {
 	}
 }
 
-// Regression test (D10): Hook installation is idempotent, preserves unrelated hooks/settings,
+// Regression test: Hook installation is idempotent, preserves unrelated hooks/settings,
 // and refuses to overwrite malformed JSON files.
 func TestInstallHooksIsIdempotentPreservesForeignHooksAndRejectsCorruptJSON(t *testing.T) {
 	repo := t.TempDir()

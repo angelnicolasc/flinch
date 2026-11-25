@@ -41,7 +41,7 @@ type junitMessage struct {
 }
 
 // RunPytest executes pytest with `--continue-on-collection-errors` and JUnit XML output
-// so collection/import errors are reliably separated from test assertion failures and skips (§5.2).
+// so collection/import errors are reliably separated from test assertion failures and skips.
 func RunPytest(ctx context.Context, dir string, targets []string, selector string, timeout time.Duration) (TestRunResult, error) {
 	if timeout <= 0 {
 		timeout = 2 * time.Minute

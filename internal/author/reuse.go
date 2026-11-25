@@ -26,10 +26,10 @@ import (
 	"github.com/angelnicolasc/flinch/internal/runner"
 )
 
-// AuthoringBudgetCap is the experimental D1 threshold for in-turn authoring including proof.
+// AuthoringBudgetCap is the experimental threshold for in-turn authoring including proof.
 const AuthoringBudgetCap = 90 * time.Second
 
-// ReuseStatus describes the outcome of inspecting a fix diff for a reusable protection (D1, D3, D4).
+// ReuseStatus describes the outcome of inspecting a fix diff for a reusable protection.
 type ReuseStatus string
 
 const (
@@ -63,7 +63,7 @@ type DiscoveredTestCandidate struct {
 	NeighborSelector string
 }
 
-// AuthoringEvent logs D2 metrics (nominations, skips by reason, reused, written, timeouts) locally.
+// AuthoringEvent logs authoring metrics (nominations, skips by reason, reused, written, timeouts) locally.
 type AuthoringEvent struct {
 	Timestamp              time.Time `json:"timestamp"`
 	SessionID              string    `json:"session_id,omitempty"`
@@ -123,7 +123,7 @@ func CountUnrecognizedAssertions(stateDir string) (int, error) {
 
 var skipLineRe = regexp.MustCompile(`(?im)^\s*flinch\s+skip\s*:\s*(.+?)\s*$`)
 
-// ParseSkipFromText detects an agent's `flinch skip: <reason>` closure (D2).
+// ParseSkipFromText detects an agent's `flinch skip: <reason>` closure.
 func ParseSkipFromText(text string) (string, bool) {
 	m := skipLineRe.FindStringSubmatch(text)
 	if m == nil {
@@ -134,7 +134,7 @@ func ParseSkipFromText(text string) (string, bool) {
 
 // ReuseFirst inspects the diff between brokenRef and fixedRef for an existing protection
 // (such as a newly added test case/row or a valid managed guidance line) and proves it
-// without requiring a continuation (D1, D3, D4).
+// without requiring a continuation.
 func ReuseFirst(ctx context.Context, repoRoot string, cfg config.Config, brokenRef, fixedRef string, timeout time.Duration, hosts ...string) (ReuseOutcome, error) {
 	ctx = runner.WithCommandRepository(ctx, repoRoot)
 	if timeout <= 0 {
@@ -227,7 +227,7 @@ func ReuseFirst(ctx context.Context, repoRoot string, cfg config.Config, brokenR
 		lastInconclusiveReason = fmt.Sprintf("%s (%s)", rep.Reason, rep.ActionableError)
 	}
 
-	// Check lint reuse (D1, D3): if a configured repository linter already distinguishes
+	// Check lint reuse: if a configured repository linter already distinguishes
 	// brokenRef from fixedRef and an in-scope legitimate neighbor exists, prove and register it.
 	if lintOut, ok := reuseConfiguredLint(ctx, repoRoot, cfg, brokenRef, fixedRef, timeout); ok {
 		lintOut.UnrecognizedAssertions = unrecognized
@@ -242,7 +242,7 @@ func ReuseFirst(ctx context.Context, repoRoot string, cfg config.Config, brokenR
 		}, nil
 	}
 
-	// Check managed context-guide file (D3) if changed in the diff.
+	// Check managed context-guide file if changed in the diff.
 	guideFile := cfg.ContextGuide.File
 	if strings.TrimSpace(guideFile) == "" {
 		guideFile = "AGENTS.md"
@@ -284,7 +284,7 @@ func ReuseFirst(ctx context.Context, repoRoot string, cfg config.Config, brokenR
 }
 
 // ExtractTestCandidates discovers newly added test cases and sibling legitimate neighbors
-// from the diff between brokenRef and fixedRef across Go, Python, and JS/TS test files (D1, D4, D9).
+// from the diff between brokenRef and fixedRef across Go, Python, and JS/TS test files.
 func ExtractTestCandidates(ctx context.Context, repoRoot string, cfg config.Config, brokenRef, fixedRef string) ([]DiscoveredTestCandidate, error) {
 	changes, err := gitutil.DiffFileChanges(ctx, repoRoot, brokenRef, fixedRef)
 	if err != nil {
@@ -717,7 +717,7 @@ func productScope(testPath string, changes []gitutil.FileChange, support []strin
 }
 
 // reuseConfiguredLint checks whether any linter configured in .flinch/flinch.toml catches
-// a rule violation on brokenRef that disappeared on fixedRef and passes an in-scope neighbor (D1, D4).
+// a rule violation on brokenRef that disappeared on fixedRef and passes an in-scope neighbor.
 func reuseConfiguredLint(ctx context.Context, repoRoot string, cfg config.Config, brokenRef, fixedRef string, timeout time.Duration) (ReuseOutcome, bool) {
 	if len(cfg.Lint) == 0 {
 		return ReuseOutcome{}, false

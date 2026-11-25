@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-// CapabilityState mirrors §2.1's verifiable onboarding matrix states.
+// CapabilityState mirrors the verifiable onboarding matrix states.
 type CapabilityState string
 
 const (
@@ -33,7 +33,7 @@ type CapabilityEntry struct {
 	Detail string          `json:"detail"`
 }
 
-// CapabilityMatrix summarizes what this clone and repository can actually guarantee (§2.1).
+// CapabilityMatrix summarizes what this clone and repository can actually guarantee.
 type CapabilityMatrix struct {
 	LocalCapture         CapabilityEntry `json:"local_capture"`
 	CandidatePreparation CapabilityEntry `json:"candidate_preparation"`
@@ -89,7 +89,7 @@ func DiscoverConfig(_ context.Context, repoRoot string) (config.Config, []string
 }
 
 // Run inspects repoRoot, computes the capability matrix, evaluates reflex accreditation freshness,
-// and optionally prunes orphan Flinch worktrees (§2.1, §3.2, §9).
+// and optionally prunes orphan Flinch worktrees.
 func Run(ctx context.Context, repoRoot string, pruneWorktrees bool) (Report, error) {
 	cfg, cfgPresent, err := config.LoadOrDefault(repoRoot)
 	if err != nil {

@@ -9,7 +9,7 @@ import (
 	"github.com/angelnicolasc/flinch/internal/gitutil"
 )
 
-// Nomination captures deterministic evidence that a turn reworked code edited in the prior agent turn (D2, P3).
+// Nomination captures deterministic evidence that a turn reworked code edited in the prior agent turn.
 type Nomination struct {
 	Nominated          bool     `json:"nominated"`
 	Reason             string   `json:"reason,omitempty"`
@@ -19,7 +19,7 @@ type Nomination struct {
 	FixedRef           string   `json:"fixed_ref,omitempty"`
 }
 
-// NominateCorrection implements D2's deterministic nomination rule:
+// NominateCorrection implements the deterministic nomination rule:
 // a human message follows an agent turn that edited files (prevStart -> prevEnd),
 // and the new turn's edits (currStart -> currEnd) overlap the earlier edits by hunk
 // at a line that the previous turn actually added. File overlap locates candidates only.

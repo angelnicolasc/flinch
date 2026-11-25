@@ -23,7 +23,7 @@ import (
 func runHook(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	started := time.Now()
 	fs := flag.NewFlagSet("hook", flag.ContinueOnError)
-	fs.SetOutput(io.Discard) // Hooks fail open silently (P7).
+	fs.SetOutput(io.Discard) // Hooks fail open silently.
 	hostStr := fs.String("host", "", "host adapter: claude | codex | antigravity")
 	eventStr := fs.String("event", "", "hook event name")
 	userHook := fs.Bool("user", false, "delivery from the user hook installed by setup")

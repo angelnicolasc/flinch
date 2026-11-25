@@ -100,7 +100,7 @@ func TestCLIEndToEndInitQueueDoctorAndStats(t *testing.T) {
 	}
 }
 
-// Regression tests (D10):
+// Regression tests:
 // - Running `flinch init` twice changes nothing.
 // - `flinch init` never overwrites an unreadable/malformed configuration.
 // - `flinch init` does not accept or offer `team_connected`.
@@ -120,7 +120,7 @@ func TestInitIsIdempotentNeverOverwritesCorruptConfigAndRejectsTeamConnected(t *
 		t.Fatal(err)
 	}
 
-	// 1. Reject team_connected mode on init (D10).
+	// 1. Reject team_connected mode on init.
 	var out, errBuf bytes.Buffer
 	code := Run(ctx, []string{"init", "--repo", repo, "--mode", "team_connected"}, &out, &errBuf)
 	if code == 0 {
@@ -191,7 +191,7 @@ func TestCLIPauseResumeSkipReportCleanupAndHooksInit(t *testing.T) {
 	if code := Run(ctx, []string{"init", "--repo", repo, "--shared", "--hooks", "claude,codex,antigravity", "--json"}, &out, &errBuf); code != 0 {
 		t.Fatalf("init --hooks failed (%d): %s", code, errBuf.String())
 	}
-	// Second init --hooks must be a no-op across config + all 3 host hook files (D10).
+	// Second init --hooks must be a no-op across config + all 3 host hook files.
 	out.Reset()
 	errBuf.Reset()
 	if code := Run(ctx, []string{"init", "--repo", repo, "--shared", "--hooks", "claude,codex,antigravity", "--json"}, &out, &errBuf); code != 0 {
@@ -201,7 +201,7 @@ func TestCLIPauseResumeSkipReportCleanupAndHooksInit(t *testing.T) {
 		t.Fatalf("expected zero changes on second init --hooks, got: %s", out.String())
 	}
 
-	// Pause, check status, resume (D7)
+	// Pause, check status, resume
 	out.Reset()
 	errBuf.Reset()
 	if code := Run(ctx, []string{"pause", "--repo", repo, "--duration", "2h", "--reason", "experiment", "--json"}, &out, &errBuf); code != 0 {

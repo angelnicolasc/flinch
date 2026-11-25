@@ -11,7 +11,7 @@ import (
 )
 
 // Rejection remembers a declined candidate scoped by version, scope, reason, and fingerprint.
-// A later incident with distinct evidence can justify re-evaluation (§2.2).
+// A later incident with distinct evidence can justify re-evaluation.
 type Rejection struct {
 	ID          string `yaml:"id" json:"id"`
 	Version     int    `yaml:"version" json:"version"`

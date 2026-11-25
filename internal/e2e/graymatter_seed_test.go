@@ -54,7 +54,7 @@ func writeRepoFile(t *testing.T, repo, rel, content string) {
 }
 
 // naiveBodyAnalyzerSource flags every io.ReadAll(x.Body) call indiscriminately,
-// including locally constructed 2-byte in-memory responses (§11 audit counterexample).
+// including locally constructed 2-byte in-memory responses (audit counterexample).
 const naiveBodyAnalyzerSource = `package main
 
 import (
@@ -126,7 +126,7 @@ func main() {
 
 // refinedBodyAnalyzerSource flags unbounded io.ReadAll(resp.Body) calls on network responses
 // while permitting responses whose Body is locally constructed in the same function with
-// io.NopCloser(bytes.NewReader(...)) / strings.NewReader(...) (§11 2-byte near-miss case).
+// io.NopCloser(bytes.NewReader(...)) / strings.NewReader(...) (2-byte near-miss case).
 const refinedBodyAnalyzerSource = `package main
 
 import (
@@ -287,7 +287,7 @@ func FetchCompletion(client *http.Client, url string) ([]byte, error) {
 }
 `
 
-// §11 legitimate 2-byte locally constructed in-memory response near-miss case.
+// Legitimate 2-byte locally constructed in-memory response near-miss case.
 const allowedTwoByteCase = `package provider
 
 import (
@@ -343,9 +343,9 @@ func Consolidate(client *http.Client, endpoint string) ([]byte, error) {
 }
 `
 
-// TestGrayMatterSeed27And55EndToEnd implements the §10.1 reproducible validation harness:
+// TestGrayMatterSeed27And55EndToEnd implements the reproducible validation harness:
 //  1. Reconstructs GrayMatter #27 (broken unbounded io.ReadAll -> fixed io.LimitReader).
-//  2. Refutes an overbroad candidate rule that flags the §11 2-byte in-memory allowed case.
+//  2. Refutes an overbroad candidate rule that flags the 2-byte in-memory allowed case.
 //  3. Verifies the refined repository-native analyzer via `flinch prove`.
 //  4. Accredits the integrated SHA via `flinch check --accredit` (trigger_pending -> active with PR witness).
 //  5. Clones into a clean second repository and verifies that the #55 reintroduction variant
@@ -365,7 +365,7 @@ func TestGrayMatterSeed27And55EndToEnd(t *testing.T) {
 	writeRepoFile(t, originRepo, "pkg/provider/client.go", fixedPR27Client)
 	fixedPR27SHA := gitCommit(t, originRepo, "fix: bound provider HTTP response body reads (PR #27)")
 
-	// Step A: Prove rejects the overbroad naive rule because it flags the §11 2-byte allowed case.
+	// Step A: Prove rejects the overbroad naive rule because it flags the 2-byte allowed case.
 	naiveCandidate := prove.CandidateSpec{
 		ID:         "unbounded-response-body-read",
 		Version:    1,
@@ -405,7 +405,7 @@ func TestGrayMatterSeed27And55EndToEnd(t *testing.T) {
 			naiveReport.Verdict, naiveReport.Reason, naiveReport.ActionableError)
 	}
 
-	// Step B: Prove verifies the refined rule against #27 broken, #27 fixed, and the §11 2-byte allowed case.
+	// Step B: Prove verifies the refined rule against #27 broken, #27 fixed, and the 2-byte allowed case.
 	refinedCandidate := prove.CandidateSpec{
 		ID:         "unbounded-response-body-read",
 		Version:    1,
@@ -593,7 +593,7 @@ func TestGrayMatterSeed27And55EndToEnd(t *testing.T) {
 		t.Fatalf("expected LimitReader fix hint in diagnostic: %s", turnRes.DiagnosticMessage)
 	}
 
-	// Shared protection WITHOUT Flinch installed (P2, D11, Acceptance §2):
+	// Shared protection WITHOUT Flinch installed:
 	// Run the repository's own native command directly in Clone 2!
 	nativeFailCmd := exec.CommandContext(ctx, "go", "run", "./tools/bodycheck")
 	nativeFailCmd.Dir = secondClone

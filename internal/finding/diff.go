@@ -10,7 +10,7 @@ import (
 // NewFindings returns findings present in current that were not already present in baseline.
 // Matching uses (rule/selector, path, enclosing symbol, normalized context) multiset comparison,
 // so line shifts do not create false positives, while count-preserving branch swaps inside the
-// same function DO surface as new findings (§5.2, §8.1).
+// same function DO surface as new findings.
 // renameMap maps currentPath -> baselinePath so renamed files preserve baseline debt identity.
 func NewFindings(baseline, current []Finding, renameMap map[string]string) []Finding {
 	baseCounts := make(map[string]int, len(baseline))
@@ -35,7 +35,7 @@ func NewFindings(baseline, current []Finding, renameMap map[string]string) []Fin
 }
 
 // IncidentMatchResult summarizes pairing between broken-tree and fixed-tree findings
-// across the changed files of an incident (§5.2).
+// across the changed files of an incident.
 type IncidentMatchResult struct {
 	MatchedBroken   []Finding `json:"matched_broken,omitempty"`
 	RemainingFixed  []Finding `json:"remaining_fixed,omitempty"`
@@ -45,7 +45,7 @@ type IncidentMatchResult struct {
 
 // MatchIncidentSites pairs broken-tree findings overlapping the incident diff against
 // corresponding sites in the fixed tree, tracking file renames, insertion points, and
-// occurrence identities (§5.2).
+// occurrence identities.
 func MatchIncidentSites(changes []gitutil.FileChange, brokenFindings, fixedFindings []Finding) IncidentMatchResult {
 	res := IncidentMatchResult{}
 	if len(changes) == 0 {

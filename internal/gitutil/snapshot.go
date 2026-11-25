@@ -11,7 +11,7 @@ import (
 // CaptureWorkingTreeSnapshot writes the exact current working tree (tracked edits, staged edits,
 // untracked non-ignored files, renames, and deletions) into Git's object store as a pure tree OID
 // using a temporary index. It creates NO commits, NO refs, and NO worktree HEAD updates, so it
-// never conflicts with repository identity or signing hooks (D11, P2, P10).
+// never conflicts with repository identity or signing hooks.
 func CaptureWorkingTreeSnapshot(ctx context.Context, repoRoot, _ string) (string, error) {
 	tmpDir, err := os.MkdirTemp("", "flinch-index-*")
 	if err != nil {

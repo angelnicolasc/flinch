@@ -17,7 +17,7 @@ import (
 
 // Worktree represents an isolated materialized proof tree owned by Flinch.
 // Trees are checked out via temporary index + checkout-index (no Git refs or worktree HEADs)
-// so repository signing hooks such as reference-transaction are never triggered (D11).
+// so repository signing hooks such as reference-transaction are never triggered.
 type Worktree struct {
 	RepoRoot string
 	Path     string

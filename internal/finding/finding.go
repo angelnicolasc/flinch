@@ -57,7 +57,7 @@ func NormalizeContext(s string) string {
 }
 
 // OccurrenceKey identifies a finding independent of line number shifts, combining rule/selector,
-// normalized path, enclosing symbol, and normalized expression context (§5.2, §8.1).
+// normalized path, enclosing symbol, and normalized expression context.
 func (f Finding) OccurrenceKey() string {
 	return fmt.Sprintf("%s|%s|%s|%s",
 		f.EffectiveID(),

@@ -10,11 +10,11 @@ import (
 	"time"
 )
 
-// EnvDisableVar disables Flinch capture and hooks for one session when set to "off" (D7, P7).
+// EnvDisableVar disables Flinch capture and hooks for one session when set to "off".
 const EnvDisableVar = "FLINCH"
 
 // State represents an active pause stored under <git-common-dir>/flinch/pause.json
-// so it applies across the local clone and all its worktrees (D7).
+// so it applies across the local clone and all its worktrees.
 type State struct {
 	Paused    bool       `json:"paused"`
 	StartedAt time.Time  `json:"started_at"`
@@ -22,7 +22,7 @@ type State struct {
 	Reason    string     `json:"reason,omitempty"`
 }
 
-// Interval records a completed or active pause interval for local transparency (D7).
+// Interval records a completed or active pause interval for local transparency.
 // While hooks are off, the number of turns in that interval is explicitly unknown.
 type Interval struct {
 	StartedAt    time.Time  `json:"started_at"`
@@ -32,7 +32,7 @@ type Interval struct {
 	TurnsUnknown bool       `json:"turns_unknown"`
 }
 
-// DisabledByEnv reports whether FLINCH=off is set for the current process/session (D7).
+// DisabledByEnv reports whether FLINCH=off is set for the current process/session.
 func DisabledByEnv() bool {
 	val := strings.ToLower(strings.TrimSpace(os.Getenv(EnvDisableVar)))
 	return val == "off" || val == "0" || val == "false"
@@ -46,7 +46,7 @@ func intervalLogPath(stateDir string) string {
 	return filepath.Join(stateDir, "log", "pauses.jsonl")
 }
 
-// Pause activates a local clone pause until resumed or duration expires (D7).
+// Pause activates a local clone pause until resumed or duration expires.
 func Pause(stateDir string, duration time.Duration, reason string, now time.Time) (State, error) {
 	if now.IsZero() {
 		now = time.Now().UTC()
@@ -72,7 +72,7 @@ func Pause(stateDir string, duration time.Duration, reason string, now time.Time
 	return st, nil
 }
 
-// Resume clears any active pause and logs the completed interval end time (D7).
+// Resume clears any active pause and logs the completed interval end time.
 func Resume(stateDir string, now time.Time) (bool, error) {
 	if now.IsZero() {
 		now = time.Now().UTC()

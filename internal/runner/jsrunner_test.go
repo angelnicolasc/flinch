@@ -86,7 +86,7 @@ func TestParseJSReportJSONHandlesVitestJestSkipTodoAndLoadFailure(t *testing.T) 
 		t.Fatalf("expected CompileOnly=true when suite fails to load")
 	}
 
-	// Vitest TS typecheck error must not count as behavioral failure (D9).
+	// Vitest TS typecheck error must not count as behavioral failure.
 	tsErrSuite := `{"success":false,"numTotalTests":1,"testResults":[{"name":"/repo/a.test.ts","status":"failed","assertionResults":[{"ancestorTitles":["suite"],"title":"t","status":"failed","failureMessages":["error TS2345: Argument of type 'number' is not assignable"]}]}]}`
 	var resTS TestRunResult
 	if err := ParseJSReportJSON([]byte(tsErrSuite), "vitest", &resTS); err != nil {
@@ -126,7 +126,7 @@ func TestBuildJSTestNameRegexAndMonorepoPackageDiscovery(t *testing.T) {
 }
 
 // TestLiveNodeStubVitestAndJestFileReporter verifies file-based JSON reporting (immune to noisy stdout)
-// and workspace CWD execution using the locally installed Node runtime (D9).
+// and workspace CWD execution using the locally installed Node runtime.
 func TestLiveNodeStubVitestAndJestFileReporter(t *testing.T) {
 	nodeInfo := ProbeTool(context.Background(), []string{"node"}, "--version")
 	if !nodeInfo.Available {
@@ -207,7 +207,7 @@ process.exit(okCwd ? 0 : 1);
 	}
 }
 
-// Regression test (D11, P10): Candidate commands receive a filtered environment without user secrets.
+// Regression test: Candidate commands receive a filtered environment without user secrets.
 func TestFilteredEnvStripsSecretsAndScopesTempDir(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-ant-super-secret-value")
 	t.Setenv("GITHUB_TOKEN", "ghp_supersecret1234567890abcdef")

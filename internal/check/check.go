@@ -65,7 +65,7 @@ type Result struct {
 	DiagnosticMessage   string               `json:"diagnostic_message,omitempty"`
 }
 
-// TurnOptions configures interactive turn enforcement (§8.1).
+// TurnOptions configures interactive turn enforcement.
 type TurnOptions struct {
 	SessionID  string
 	WorktreeID string
@@ -73,14 +73,14 @@ type TurnOptions struct {
 	Deadline   time.Duration
 }
 
-// CIOptions configures shared CI enforcement (§3.2, §8.1).
+// CIOptions configures shared CI enforcement.
 type CIOptions struct {
 	BaseRef   string
 	CheckIntg bool
 	Timeout   time.Duration
 }
 
-// AccreditOptions configures activation accreditation on an integrated SHA (§3.2).
+// AccreditOptions configures activation accreditation on an integrated SHA.
 type AccreditOptions struct {
 	IntegratedRef    string
 	ReflexID         string
@@ -93,7 +93,7 @@ type AccreditOptions struct {
 
 // RunTurn evaluates trusted active reflexes over changes made during the current turn,
 // applying baseline occurrence diffing, integrity checks, a single unified deadline
-// covering startup through completion, and shared continuation/test budgets (D5, D6, P5-P8).
+// covering startup through completion, and shared continuation/test budgets.
 func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnOptions) (Result, error) {
 	ctx = runner.WithCommandRepository(ctx, repoRoot)
 	start := time.Now()
@@ -115,7 +115,7 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 		ContinuationsLimit: cfg.Loop.MaxContinuationsPerTurn,
 	}
 
-	// Single unified deadline starts immediately to cover startup, loading, integrity, static scans, and fast tests (D5, P6).
+	// Single unified deadline starts immediately to cover startup, loading, integrity, static scans, and fast tests.
 	tctx, cancel := context.WithTimeout(ctx, deadline)
 	defer cancel()
 
@@ -173,7 +173,7 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 	}
 	res.TouchedFiles = touched
 
-	// Load ONLY reflexes present in the trusted revision so proposed rules stay isolated and deleted records stay visible (D6, P8).
+	// Load ONLY reflexes present in the trusted revision so proposed rules stay isolated and deleted records stay visible.
 	reflexes, err := loadTrustedReflexes(tctx, repoRoot, cfg.Executor.TrustedRef)
 	if err != nil {
 		if expiredRes, expired := failOpenIfExpired(); expired {
@@ -331,7 +331,7 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 				continue
 			}
 
-			// Baseline comparison for test reflexes (D5, P5, P7): a test already failing at checkpoint never blocks.
+			// Baseline comparison for test reflexes: a test already failing at checkpoint never blocks.
 			wt, wtErr := ensureBaselineWT()
 			if wtErr != nil {
 				res.SkippedControls = append(res.SkippedControls, SkippedControl{
@@ -377,7 +377,7 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 				baseOutcomeByName[bc.Name] = bc.Outcome
 			}
 			for _, fc := range currFailing {
-				// Block ONLY when the case demonstrably passed at the baseline checkpoint (D5, P5).
+				// Block ONLY when the case demonstrably passed at the baseline checkpoint.
 				if baseOutcomeByName[fc.Name] != runner.OutcomePass {
 					continue
 				}
@@ -419,7 +419,7 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 				continue
 			}
 
-			// Diff against turn baseline so pre-existing debt never blocks (D5, P5, P7).
+			// Diff against turn baseline so pre-existing debt never blocks.
 			// If novelty cannot be established because the baseline tree or run fails, fail open.
 			wt, wtErr := ensureBaselineWT()
 			if wtErr != nil {
@@ -476,7 +476,7 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 		}
 	}
 
-	// Determine final turn decision, honoring fail-open timeout, missing checkpoint advise-only, and loop guard (§8.1).
+	// Determine final turn decision, honoring fail-open timeout, missing checkpoint advise-only, and loop guard.
 	if tctx.Err() != nil {
 		res.Decision = DecisionAllowTimeout
 		res.DurationMS = time.Since(start).Milliseconds()
@@ -490,7 +490,7 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 	}
 
 	if !hasCP {
-		// Without a turn checkpoint, report advisory diagnostics without blocking (§8.1).
+		// Without a turn checkpoint, report advisory diagnostics without blocking.
 		res.Decision = DecisionAdvise
 		res.Blocking = false
 		res.DiagnosticMessage = FormatAgentDiagnostic(res)
@@ -498,7 +498,7 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 		return res, nil
 	}
 
-	// Check loop guard limits: max total continuations per turn AND max per finding (§8.1).
+	// Check loop guard limits: max total continuations per turn AND max per finding.
 	if cp.TotalContinuations >= cfg.Loop.MaxContinuationsPerTurn {
 		res.Decision = DecisionAllowBudgetExhausted
 		res.Blocking = false
@@ -561,7 +561,7 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 	return res, nil
 }
 
-// RunCI evaluates all active deterministic reflexes on the shared CI surface (§3.2, §8.1).
+// RunCI evaluates all active deterministic reflexes on the shared CI surface.
 func RunCI(ctx context.Context, repoRoot string, cfg config.Config, opts CIOptions) (Result, error) {
 	ctx = runner.WithCommandRepository(ctx, repoRoot)
 	start := time.Now()
@@ -653,7 +653,7 @@ func RunCI(ctx context.Context, repoRoot string, cfg config.Config, opts CIOptio
 			}
 			currFiltered := filterFindings(r, currRun.Findings)
 
-			// If --base is specified, block only findings introduced relative to base (new-only debt baseline, §8.1).
+			// If --base is specified, block only findings introduced relative to base (new-only debt baseline).
 			effective := currFiltered
 			if opts.BaseRef != "" && len(currFiltered) > 0 {
 				if baseWT == nil {
@@ -706,7 +706,7 @@ func RunCI(ctx context.Context, repoRoot string, cfg config.Config, opts CIOptio
 
 // Accredit verifies on an isolated checkout of an integrated SHA that each selected deterministic
 // reflex is present, passes on clean code, fails on its materialized in-scope negative control
-// with attributed selector ID, and passes on its allowed near-miss cases (§3.2).
+// with attributed selector ID, and passes on its allowed near-miss cases.
 func Accredit(ctx context.Context, repoRoot string, cfg config.Config, opts AccreditOptions) ([]evidence.ActivationRecord, error) {
 	ctx = runner.WithCommandRepository(ctx, repoRoot)
 	ref := opts.IntegratedRef
@@ -804,7 +804,7 @@ func Accredit(ctx context.Context, repoRoot string, cfg config.Config, opts Accr
 		cleanFiltered := filterFindings(r, cleanRun.Findings)
 		rec.CleanTreePassed = (cleanRun.ExitCode == 0 && len(cleanFiltered) == 0)
 
-		// 2. Materialize negative control under real in-scope product path and verify attributed failure (§3.2, §9).
+		// 2. Materialize negative control under real in-scope product path and verify attributed failure.
 		rec.NegativeControl.ExpectedID = r.ExpectedID()
 		if r.Cases.Broken != "" {
 			targetPath := r.Cases.TargetPath
@@ -893,7 +893,7 @@ func Accredit(ctx context.Context, repoRoot string, cfg config.Config, opts Accr
 }
 
 // FormatAgentDiagnostic builds a single concise message listing rule/case, location,
-// expected behavior, recommended API/fix, and the `flinch report` channel (§8.1).
+// expected behavior, recommended API/fix, and the `flinch report` channel.
 func FormatAgentDiagnostic(res Result) string {
 	if len(res.Findings) == 0 && len(res.IntegrityViolations) == 0 {
 		return ""
@@ -1001,7 +1001,7 @@ func loadTrustedReflexes(ctx context.Context, repoRoot, trustedRef string) ([]re
 		return nil, nil
 	}
 	// Enumerate and parse reflexes directly from trustedRef so deleted records remain visible
-	// to integrity checks and unreviewed working-tree reflexes stay isolated (D6, P8).
+	// to integrity checks and unreviewed working-tree reflexes stay isolated.
 	files, err := gitutil.ListTreeFiles(ctx, repoRoot, trustedRef, reflex.ReflexesRelDir)
 	if err != nil {
 		return nil, err

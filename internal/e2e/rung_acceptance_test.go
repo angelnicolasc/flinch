@@ -22,7 +22,7 @@ import (
 	"github.com/angelnicolasc/flinch/internal/testutil"
 )
 
-// TestStructureRungInternalBoundaryProveAndZeroFlinchClone verifies Acceptance §2 (Structure):
+// TestStructureRungInternalBoundaryProveAndZeroFlinchClone verifies the structure rung:
 // a Go internal/ module boundary enforced by `go build ./...` catches the prohibited import,
 // allows a legitimate consumer neighbor, and blocks repeats in a clone without Flinch.
 func TestStructureRungInternalBoundaryProveAndZeroFlinchClone(t *testing.T) {
@@ -93,7 +93,7 @@ func TestStructureRungInternalBoundaryProveAndZeroFlinchClone(t *testing.T) {
 	}
 }
 
-// TestGuardRungRecognizableFailureMatchesNativeCommand verifies Acceptance §2 (Guard):
+// TestGuardRungRecognizableFailureMatchesNativeCommand verifies the guard rung:
 // the recognizable failure signal seen during `prove` is the exact same signal that fails
 // the repository's native guard command in a clone without Flinch.
 func TestGuardRungRecognizableFailureMatchesNativeCommand(t *testing.T) {
@@ -173,7 +173,7 @@ func main() {
 	}
 }
 
-// TestBudgetSlowTestDeferredAtTurnEndAndRunByNativeCI verifies Acceptance §1 (Budget):
+// TestBudgetSlowTestDeferredAtTurnEndAndRunByNativeCI verifies the turn budget:
 // a test measured > 5s is skipped at turn end, while native `go test ./...` still runs it.
 func TestBudgetSlowTestDeferredAtTurnEndAndRunByNativeCI(t *testing.T) {
 	ctx := context.Background()
@@ -222,7 +222,7 @@ func TestBudgetSlowTestDeferredAtTurnEndAndRunByNativeCI(t *testing.T) {
 	}
 }
 
-// TestSharedInstructionsLineAndSkipOutcomes verifies Acceptance §1 (Line & Skip):
+// TestSharedInstructionsLineAndSkipOutcomes verifies the guidance line and skip outcomes:
 // - Durable convention lands as one line inside <!-- flinch:start -->..<!-- flinch:end --> with no edits outside.
 // - One-off preference closes with silent logged skip and zero file modifications.
 func TestSharedInstructionsLineAndSkipOutcomes(t *testing.T) {

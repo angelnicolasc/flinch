@@ -11,14 +11,14 @@ import (
 	"strings"
 )
 
-// InstallResult summarizes an idempotent hook installation for one host (D8, D10).
+// InstallResult summarizes an idempotent hook installation for one host.
 type InstallResult struct {
 	Host    Host   `json:"host"`
 	Path    string `json:"path"`
 	Changed bool   `json:"changed"`
 }
 
-// InstallHooks installs or verifies Flinch hooks for host inside repoRoot (D8, D10):
+// InstallHooks installs or verifies Flinch hooks for host inside repoRoot:
 //   - Running twice changes nothing (idempotent).
 //   - Preserves hooks and settings belonging to other tools.
 //   - Never overwrites a JSON file it cannot read or parse.
@@ -132,7 +132,7 @@ func entryHasCommand(item any, wantCmd string) bool {
 }
 
 // installAntigravityHooks merges a single named "flinch" hook group into .agents/hooks.json
-// following Antigravity's documented schema (PreInvocation and Stop flat handler arrays; D8, D10).
+// following Antigravity's documented schema (PreInvocation and Stop flat handler arrays).
 func installAntigravityHooks(repoRoot, flinchCmd string) (InstallResult, error) {
 	const relPath = ".agents/hooks.json"
 	absPath := filepath.Join(repoRoot, filepath.FromSlash(relPath))

@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-// FilteredEnv builds a restricted environment for candidate commands and test runners (D11, P10).
+// FilteredEnv builds a restricted environment for candidate commands and test runners.
 // It keeps only runtime/toolchain variables required to invoke local tools, scopes temporary
 // directories outside the working tree, and omits unrelated environment variables.
 func FilteredEnv(proofRoot string, extra ...string) []string {

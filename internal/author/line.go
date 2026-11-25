@@ -11,7 +11,7 @@ const (
 	ManagedEndMarker   = "<!-- flinch:end -->"
 )
 
-// LineValidationResult summarizes D3's four checks on an agent-written managed guidance line.
+// LineValidationResult summarizes the four checks on an agent-written managed guidance line.
 type LineValidationResult struct {
 	Changed       bool     `json:"changed"`
 	Valid         bool     `json:"valid"`
@@ -24,7 +24,7 @@ type LineValidationResult struct {
 var urlRe = regexp.MustCompile(`https?://\S+`)
 
 // ValidateManagedLine checks an agent's edit to the shared instructions file (e.g. AGENTS.md)
-// against all four D3 constraints:
+// against all four constraints:
 //  1. Every added line sits strictly between <!-- flinch:start --> and <!-- flinch:end -->.
 //  2. The managed section stays within maxLines (default 30); if full, skip without modifying existing content.
 //  3. No added line duplicates an existing line anywhere in the file.

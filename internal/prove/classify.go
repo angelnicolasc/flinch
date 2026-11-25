@@ -7,7 +7,7 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 )
 
-// FileClass semantically partitions incident files into product code, tests, and test support (§5.1).
+// FileClass semantically partitions incident files into product code, tests, and test support.
 type FileClass string
 
 const (
@@ -46,7 +46,7 @@ func NewClassifier(supportGlobs, explicitProduct, explicitTest, explicitSupport 
 }
 
 // Classify returns whether relPath belongs to product code, tests, or test support.
-// Explicit overrides take precedence over glob and naming heuristics (§5.1).
+// Explicit overrides take precedence over glob and naming heuristics.
 func (c Classifier) Classify(relPath string) FileClass {
 	clean := normalizePath(relPath)
 	if c.ExplicitProduct[clean] {

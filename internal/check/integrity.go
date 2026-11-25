@@ -13,7 +13,7 @@ import (
 	"github.com/angelnicolasc/flinch/internal/reflex"
 )
 
-// IntegrityViolation flags unauthorized edits to active reflexes or newly added suppression pragmas (§8.1).
+// IntegrityViolation flags unauthorized edits to active reflexes or newly added suppression pragmas.
 type IntegrityViolation struct {
 	ReflexID string `json:"check_id,omitempty"`
 	Path     string `json:"path"`
@@ -22,7 +22,7 @@ type IntegrityViolation struct {
 }
 
 // CheckIntegrity compares active reflexes, their referenced artifact files, and newly added
-// suppression comments in touchedFiles against trustedRef (§8.1).
+// suppression comments in touchedFiles against trustedRef.
 func CheckIntegrity(ctx context.Context, repoRoot, trustedRef string, reflexes []reflex.Reflex, touchedFiles []string) ([]IntegrityViolation, error) {
 	if strings.TrimSpace(trustedRef) == "" {
 		trustedRef = "HEAD"
@@ -68,7 +68,7 @@ func CheckIntegrity(ctx context.Context, repoRoot, trustedRef string, reflexes [
 			}
 		}
 
-		// 2. Check referenced artifact (protected case/rule, not unrelated edits in the same file; D6).
+		// 2. Check referenced artifact (protected case/rule, not unrelated edits in the same file).
 		if r.Artifact.Path != "" {
 			relArt := filepath.ToSlash(strings.TrimPrefix(filepath.Clean(r.Artifact.Path), "./"))
 			trustedArtBytes, artErr := gitutil.FileAtRef(ctx, repoRoot, trustedRef, relArt)

@@ -121,7 +121,7 @@ func TestDemo(t *testing.T) {
 	}
 }
 
-// Regression test (D11, P10): Executing a candidate command via RunArtifact must not expose user secrets.
+// Regression test: Executing a candidate command via RunArtifact must not expose user secrets.
 func TestCommandArtifactUsesFilteredEnvironment(t *testing.T) {
 	t.Setenv("FLINCH_TEST_SECRET_KEY", "never-leak-this-secret")
 	dir := t.TempDir()

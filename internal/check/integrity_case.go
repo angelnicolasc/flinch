@@ -15,7 +15,7 @@ import (
 	"github.com/angelnicolasc/flinch/internal/reflex"
 )
 
-// artifactCaseIntact compares only the protected case/rule in currBytes against trustedBytes (D6, P8).
+// artifactCaseIntact compares only the protected case/rule in currBytes against trustedBytes.
 // Adding an unrelated sibling test or an unrelated row to a table-driven test returns intact=true.
 // Modifying or deleting the protected case, weakening the enclosing test assertion logic, or
 // deleting the artifact returns intact=false with a concrete explanation.

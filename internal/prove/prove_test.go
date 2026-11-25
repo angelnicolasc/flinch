@@ -157,7 +157,7 @@ func TestProveGoTestDistinguishesVerifiedRefutedSkippedAndCompileOnly(t *testing
 		t.Fatalf("expected refuted/passed_on_broken, got %s/%s", repRefuted.Verdict, repRefuted.Reason)
 	}
 
-	// 3. Skip->pass test -> Inconclusive (skipped_on_broken), NEVER verified (D4, §5.2)!
+	// 3. Skip->pass test -> Inconclusive (skipped_on_broken), NEVER verified!
 	repSkip, err := Verify(ctx, repo, CandidateSpec{
 		ID:         "clamp-skip",
 		Version:    1,
@@ -205,7 +205,7 @@ func TestProveGoTestDistinguishesVerifiedRefutedSkippedAndCompileOnly(t *testing
 	}
 }
 
-// Regression tests (D4, P4):
+// Regression tests:
 // - Empty selector never matches every test case; returns inconclusive/missing_selector.
 // - Test proof without a legitimate neighbor never returns verified; returns inconclusive/missing_allowed_case.
 // - Skipped or failing neighbor prevents verification.
@@ -312,7 +312,7 @@ func TestProveLintWithOutOfScopeAllowedCaseReturnsInconclusive(t *testing.T) {
 	}
 	fixedSHA := commitAll(t, repo, "fix printf")
 
-	// Allowed case outside scope must be rejected as inconclusive (§4).
+	// Allowed case outside scope must be rejected as inconclusive.
 	rep, err := Verify(ctx, repo, CandidateSpec{
 		ID:         "vet-printf",
 		Version:    1,

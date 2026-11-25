@@ -20,7 +20,7 @@ import (
 	"github.com/angelnicolasc/flinch/internal/workspacetrust"
 )
 
-// Host identifies a supported coding-agent host adapter (D8, P9).
+// Host identifies a supported coding-agent host adapter.
 type Host string
 
 const (
@@ -142,13 +142,13 @@ func ResponseDeadline(ctx context.Context) time.Time {
 	return deadline
 }
 
-// Handle executes one host hook event against the shared Flinch engine (D1-D3, D5-D8, P7, P9).
+// Handle executes one host hook event against the shared Flinch engine.
 // Every error path fails open (ExitCode 0) so Flinch never wedges a host session.
 func Handle(ctx context.Context, host Host, explicitEvent string, stdinBytes []byte, explicitRepo string) (response Response) {
 	allowResp := AllowResponse(host)
 	started := time.Now()
 
-	// Fast exit when FLINCH=off is set for this session (D7).
+	// Fast exit when FLINCH=off is set for this session.
 	if pause.DisabledByEnv() {
 		return allowResp
 	}
@@ -156,7 +156,7 @@ func Handle(ctx context.Context, host Host, explicitEvent string, stdinBytes []b
 	var payload Payload
 	if len(strings.TrimSpace(string(stdinBytes))) > 0 {
 		if err := json.Unmarshal(stdinBytes, &payload); err != nil {
-			// Malformed payload -> fail open (P7).
+			// Malformed payload -> fail open.
 			return allowResp
 		}
 	}
@@ -346,13 +346,13 @@ func handleStop(
 		return allowResp
 	}
 
-	// Capture post-turn state cleanly without creating Git refs (D11).
+	// Capture post-turn state cleanly without creating Git refs.
 	currEndSnap, err := gitutil.CaptureWorkingTreeSnapshot(ctx, repoRoot, "flinch post-turn snapshot")
 	if err != nil || ctx.Err() != nil {
 		return allowResp
 	}
 
-	// 1. Enforcement of trusted protections ALWAYS takes priority over authoring (D1, D5, D6, P6).
+	// 1. Enforcement of trusted protections ALWAYS takes priority over authoring.
 	started := ctx.Value(hookStartedKey{}).(time.Time)
 	enforcement, cancel := context.WithDeadline(ctx, started.Add(cfg.LoopDeadline()))
 	turnRes, err := check.RunTurn(enforcement, repoRoot, cfg, check.TurnOptions{
@@ -380,7 +380,7 @@ func handleStop(
 		return allowResp
 	}
 
-	// Helper to finalize turn snapshots so the NEXT turn can nominate overlapping rework (D2).
+	// Helper to finalize turn snapshots so the NEXT turn can nominate overlapping rework.
 	requestContinuation := func(reason string) Response {
 		cp.ContinuationHash = check.HashPrompt(reason)
 		if ctx.Err() != nil || check.SaveCheckpoint(stateDir, cp) != nil {
@@ -409,7 +409,7 @@ func handleStop(
 		return allowResp
 	}
 
-	// If the agent explicitly closed a nomination via `flinch skip` CLI or final message (D2).
+	// If the agent explicitly closed a nomination via `flinch skip` CLI or final message.
 	if cp.SkipReason != "" {
 		_ = author.RecordAuthoringEvent(stateDir, author.AuthoringEvent{
 			SessionID: sessionID, TurnID: cp.TurnID, Host: string(host),
@@ -427,7 +427,7 @@ func handleStop(
 		return allowResp
 	}
 
-	// 2. Follow-up Stop AFTER an authoring continuation was requested (D1, D3).
+	// 2. Follow-up Stop AFTER an authoring continuation was requested.
 	if cp.AuthoringAttempted {
 		remaining := author.AuthoringBudgetCap
 		if cp.AuthoringStartedAt != nil {
@@ -463,7 +463,7 @@ func handleStop(
 				Kind: "line_recorded", Reason: strings.Join(outcome.AddedLines, "; "),
 			})
 		case author.ReuseLineFormatError:
-			// D3: At most one formatting repair continuation, only if budget remains.
+			// At most one formatting repair continuation, only if budget remains.
 			if !cp.LineRepairUsed && cp.TotalContinuations < cfg.Loop.MaxContinuationsPerTurn {
 				cp.LineRepairUsed = true
 				cp.TotalContinuations++
@@ -477,7 +477,7 @@ func handleStop(
 				Kind: "inconclusive_closed", Reason: outcome.Reason,
 			})
 		default:
-			// D3: Never auto-fallback to AGENTS.md when proof fails or is inconclusive; close silently.
+			// Never auto-fallback to AGENTS.md when proof fails or is inconclusive; close silently.
 			_ = author.RecordAuthoringEvent(stateDir, author.AuthoringEvent{
 				SessionID: sessionID, TurnID: cp.TurnID, Host: string(host),
 				Kind: "inconclusive_closed", Reason: outcome.Reason,
@@ -488,7 +488,7 @@ func handleStop(
 		return allowResp
 	}
 
-	// 3. Normal end of turn: check deterministic D2 nomination (hunk/symbol overlap with prior turn).
+	// 3. Normal end of turn: check deterministic nomination (hunk/symbol overlap with prior turn).
 	nom, nomErr := author.NominateCorrection(ctx, repoRoot, cp.PreviousStartSnap, cp.PreviousEndSnap, cp.SnapshotSHA, currEndSnap)
 	if nomErr != nil || !nom.Nominated {
 		finalizeTurn()
@@ -500,7 +500,7 @@ func handleStop(
 		Kind: "nominated", Reason: strings.Join(nom.OverlappingFiles, ", "),
 	})
 
-	// 4. Reuse-first (D1): inspect the fix diff for a protection the agent already wrote!
+	// 4. Reuse-first: inspect the fix diff for a protection the agent already wrote!
 	authorStart := time.Now().UTC()
 	outcome, _ := author.ReuseFirst(ctx, repoRoot, cfg, nom.BrokenRef, nom.FixedRef, author.AuthoringBudgetCap, string(host))
 	if outcome.CommandApprovalDigest != "" {
@@ -533,7 +533,7 @@ func handleStop(
 		finalizeTurn()
 		return allowResp
 	case author.ReuseInconclusive:
-		// D4: Keep passing test as ordinary test out of protection count, close silently.
+		// Keep a passing test as an ordinary test, outside the protection count, and close silently.
 		_ = author.RecordAuthoringEvent(stateDir, author.AuthoringEvent{
 			SessionID: sessionID, TurnID: cp.TurnID, Host: string(host),
 			Kind: "inconclusive_closed", Reason: outcome.Reason,
@@ -564,7 +564,7 @@ func handleStop(
 		return allowResp
 	}
 
-	// 5. Ask only when needed (D1): one continuation if budget and 90s cap permit.
+	// 5. Ask only when needed: one continuation if budget and 90s cap permit.
 	if time.Since(authorStart) > author.AuthoringBudgetCap {
 		_ = author.RecordAuthoringEvent(stateDir, author.AuthoringEvent{
 			SessionID: sessionID, TurnID: cp.TurnID, Host: string(host),

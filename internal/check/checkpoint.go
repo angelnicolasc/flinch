@@ -18,7 +18,7 @@ import (
 )
 
 // TurnCheckpoint captures the minimal working-tree baseline at turn start and tracks
-// continuation and test budgets across logical turn retries (D5, D11, P6, P10).
+// continuation and test budgets across logical turn retries.
 // By default no prompt text is persisted; only identifiers and PromptHash are stored.
 type TurnCheckpoint struct {
 	Schema               int               `json:"schema"`
@@ -79,7 +79,7 @@ func LockTurn(ctx context.Context, stateDir, sessionID, worktreeID string) (func
 	}
 }
 
-// HashPrompt returns a deterministic SHA-256 digest of trimmed prompt text without storing text (D11).
+// HashPrompt returns a deterministic SHA-256 digest of trimmed prompt text without storing text.
 func HashPrompt(prompt string) string {
 	trimmed := strings.TrimSpace(prompt)
 	if trimmed == "" {
@@ -90,12 +90,12 @@ func HashPrompt(prompt string) string {
 }
 
 // CaptureCheckpoint records the current working-tree file hashes, HEAD SHA, and prompt digest
-// for a session + worktree without mutating Git state or persisting prompt text by default (D11, P10).
+// for a session + worktree without mutating Git state or persisting prompt text by default.
 func CaptureCheckpoint(ctx context.Context, repoRoot, sessionID, worktreeID, prompt, promptID string, captureSnapshot bool) (TurnCheckpoint, error) {
 	return CaptureCheckpointWithPolicy(ctx, repoRoot, sessionID, worktreeID, prompt, promptID, captureSnapshot, false, 0)
 }
 
-// CaptureCheckpointWithPolicy captures a turn checkpoint honoring storePromptText and retentionDays (D11).
+// CaptureCheckpointWithPolicy captures a turn checkpoint honoring storePromptText and retentionDays.
 func CaptureCheckpointWithPolicy(
 	ctx context.Context,
 	repoRoot, sessionID, worktreeID, prompt, promptID string,
@@ -117,7 +117,7 @@ func CaptureCheckpointWithPolicy(
 		_, _ = CleanupExpired(stateDir, retentionDays, time.Now().UTC())
 	}
 
-	// Preserve previous turn's edit snapshots for correction nomination (D2).
+	// Preserve previous turn's edit snapshots for correction nomination.
 	var prevStart, prevEnd string
 	if prev, ok, _ := LoadCheckpoint(stateDir, sessionID, worktreeID); ok {
 		prevStart = prev.PreviousStartSnap

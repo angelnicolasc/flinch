@@ -161,7 +161,7 @@ func TestWorktreeLifecycle(t *testing.T) {
 	}
 }
 
-// Regression test (D11, P2): Snapshot capture and proof-tree materialization must succeed
+// Regression test: Snapshot capture and proof-tree materialization must succeed
 // even when a repository installs a strict reference-transaction hook rejecting unsigned
 // commits or worktree HEAD ref updates.
 func TestSnapshotAndMaterializeRespectStrictReferenceTransactionHook(t *testing.T) {

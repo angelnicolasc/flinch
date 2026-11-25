@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// LifecycleState tracks a protection candidate from initial capture through integration (§3.2).
+// LifecycleState tracks a protection candidate from initial capture through integration.
 type LifecycleState string
 
 const (
@@ -25,7 +25,7 @@ const (
 	StateDismissed  LifecycleState = "dismissed"
 )
 
-// SurfaceStatus describes observed protection accreditation on a concrete execution surface (§3.2).
+// SurfaceStatus describes observed protection accreditation on a concrete execution surface.
 type SurfaceStatus string
 
 const (
@@ -63,7 +63,7 @@ type AllowedControlProof struct {
 }
 
 // TriggerWitness records that a real pull_request or merge_group event executed the job with matching filters.
-// A manual workflow_dispatch run alone does not satisfy PR trigger accreditation (§3.2, §10.2).
+// A manual workflow_dispatch run alone does not satisfy PR trigger accreditation.
 type TriggerWitness struct {
 	Witnessed    bool      `json:"witnessed"`
 	Event        string    `json:"event,omitempty"` // pull_request | merge_group | workflow_dispatch

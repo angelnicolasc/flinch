@@ -132,7 +132,7 @@ func writeAtomic(path string, data []byte) error {
 }
 
 // IngestSignal persists a deduplicated signal, links or opens an episode, and only AFTER
-// persisting the signal updates the optional source cursor watermark (§2.2).
+// persisting the signal updates the optional source cursor watermark.
 // Synthetic signals are excluded from human correction sources.
 func (s *Store) IngestSignal(sig Signal, cursorWatermark string) (IngestResult, error) {
 	s.mu.Lock()
@@ -268,7 +268,7 @@ func (s *Store) IngestSignal(sig Signal, cursorWatermark string) (IngestResult, 
 		return IngestResult{}, err
 	}
 
-	// Persist cursor strictly AFTER the signal and episode are durable on disk (§2.2).
+	// Persist cursor strictly AFTER the signal and episode are durable on disk.
 	if cursorWatermark != "" {
 		if err := s.advanceCursorUnlocked(sig.Source, cursorWatermark); err != nil {
 			return IngestResult{}, err
@@ -307,7 +307,7 @@ func (s *Store) GetCursor(source string) (Cursor, bool, error) {
 	return cur, ok, nil
 }
 
-// ClaimNext reserves the highest-priority claimable episode with a time-bounded lease (§2.3).
+// ClaimNext reserves the highest-priority claimable episode with a time-bounded lease.
 // Expired leases from crashed workers are automatically reclaimed.
 func (s *Store) ClaimNext(workerID string, ttl time.Duration, now time.Time) (Episode, bool, error) {
 	s.mu.Lock()
@@ -393,7 +393,7 @@ func (s *Store) ReleaseLease(episodeID, workerID string) error {
 	return s.saveData(q)
 }
 
-// Suspend pauses an episode with explicit cause and next trigger so it can resume automatically (§2.3).
+// Suspend pauses an episode with explicit cause and next trigger so it can resume automatically.
 func (s *Store) Suspend(episodeID, cause, nextTrigger string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -453,7 +453,7 @@ func (s *Store) UpdateLifecycle(episodeID string, state evidence.LifecycleState)
 	return s.saveData(q)
 }
 
-// RecordDelivery records an idempotent delivery outcome for a given DeliveryKey (§2.3).
+// RecordDelivery records an idempotent delivery outcome for a given DeliveryKey.
 // Returns alreadyDelivered=true without duplicating when the key already exists.
 func (s *Store) RecordDelivery(rec DeliveryRecord) (bool, error) {
 	s.mu.Lock()

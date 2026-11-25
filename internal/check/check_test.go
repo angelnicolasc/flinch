@@ -260,7 +260,7 @@ func TestAccreditVerifiesIntegratedSHAAndSeparatesTriggerPendingFromActive(t *te
 	}
 }
 
-// Regression test (D5, P5, P7): If baseline worktree creation or baseline scan fails,
+// Regression test: If baseline worktree creation or baseline scan fails,
 // Flinch must fail open and NEVER treat pre-existing debt as new findings.
 func TestTurnCheckFailsOpenWhenBaselineComparisonFails(t *testing.T) {
 	repo, cfg := setupCheckRepo(t)
@@ -298,7 +298,7 @@ func TestTurnCheckFailsOpenWhenBaselineComparisonFails(t *testing.T) {
 	}
 }
 
-// Regression test (D5, P5): A test reflex that was already failing at checkpoint never blocks;
+// Regression test: A test reflex that was already failing at checkpoint never blocks;
 // once passing at checkpoint and broken during the turn, it blocks.
 func TestTurnCheckPreExistingFailingTestDoesNotBlock(t *testing.T) {
 	repo := t.TempDir()
@@ -377,7 +377,7 @@ func TestTurnCheckPreExistingFailingTestDoesNotBlock(t *testing.T) {
 	}
 }
 
-// Regression test (D5, P6, P7): The unified deadline covers startup and fails open on expiration.
+// Regression test: The unified deadline covers startup and fails open on expiration.
 func TestTurnCheckDeadlineCoversStartup(t *testing.T) {
 	repo, cfg := setupCheckRepo(t)
 	ctx := context.Background()
@@ -395,7 +395,7 @@ func TestTurnCheckDeadlineCoversStartup(t *testing.T) {
 	}
 }
 
-// Regression test (D5, P6): The 20s per-turn test budget persists across continuations and does not reset.
+// Regression test: The 20s per-turn test budget persists across continuations and does not reset.
 func TestTurnCheckLogicalTurnTestBudgetPersistsAcrossContinuations(t *testing.T) {
 	repo := t.TempDir()
 	ctx := context.Background()
@@ -454,7 +454,7 @@ func TestTurnCheckLogicalTurnTestBudgetPersistsAcrossContinuations(t *testing.T)
 	}
 }
 
-// Regression test (D6, P8): Deleting .flinch/checks/<id>.yml must be detected as check_deleted.
+// Regression test: Deleting .flinch/checks/<id>.yml must be detected as check_deleted.
 func TestIntegrityDetectsDeletedReflexRecord(t *testing.T) {
 	repo, cfg := setupCheckRepo(t)
 	ctx := context.Background()
@@ -485,7 +485,7 @@ func TestIntegrityDetectsDeletedReflexRecord(t *testing.T) {
 	}
 }
 
-// Regression test (D6, P8): Integrity compares only the protected case in a table-driven test.
+// Regression test: Integrity compares only the protected case in a table-driven test.
 // Adding a new unrelated row passes; editing the protected row or weakening assertions fails.
 func TestIntegrityTableTestAllowsNewRowFlagsProtectedRowOrAssertionChange(t *testing.T) {
 	repo := t.TempDir()
@@ -586,7 +586,7 @@ func TestRetryDelay(t *testing.T) {
 	}
 }
 
-// Regression tests (D11, P10):
+// Regression tests:
 // - Default checkpoint stores no prompt text on disk, only PromptHash and identifiers.
 // - CleanupExpired enforces retention_days across checkpoints, proof trees, and local event logs.
 func TestCheckpointStoresNoPromptTextByDefaultAndRetentionCleanupApplies(t *testing.T) {

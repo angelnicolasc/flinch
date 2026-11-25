@@ -11,7 +11,7 @@ import (
 	"github.com/angelnicolasc/flinch/internal/gitutil"
 )
 
-// CleanupReport summarizes verifiable privacy/retention pruning under <stateDir> (D11, P10).
+// CleanupReport summarizes verifiable privacy/retention pruning under <stateDir>.
 type CleanupReport struct {
 	RetentionDays      int       `json:"retention_days"`
 	Cutoff             time.Time `json:"cutoff"`
@@ -20,7 +20,7 @@ type CleanupReport struct {
 	PrunedLogEvents    int       `json:"pruned_log_events"`
 }
 
-// CleanupExpired enforces policy.retention_days across local checkpoints, proof trees, and JSONL logs (D11, P10).
+// CleanupExpired enforces policy.retention_days across local checkpoints, proof trees, and JSONL logs.
 func CleanupExpired(stateDir string, retentionDays int, now time.Time) (CleanupReport, error) {
 	if retentionDays < 1 {
 		retentionDays = 30

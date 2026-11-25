@@ -55,7 +55,7 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	var notes []string
 
 	if _, statErr := os.Stat(cfgPath); statErr == nil {
-		// D10: Never overwrite an existing configuration that cannot be read or parsed.
+		// Never overwrite an existing configuration that cannot be read or parsed.
 		if _, loadErr := config.Load(root); loadErr != nil {
 			fmt.Fprintf(stderr, "flinch init: existing %s could not be read or validated and will not be overwritten: %v\n", config.ConfigRelPath, loadErr)
 			return 2

@@ -10,7 +10,7 @@ import (
 	"github.com/angelnicolasc/flinch/internal/reflex"
 )
 
-// Verdict is the three-way outcome of a candidate proof (§5.3).
+// Verdict is the three-way outcome of a candidate proof.
 type Verdict string
 
 const (
@@ -48,7 +48,7 @@ const (
 	ReasonSetupError              FailureReason = "setup_error"
 )
 
-// AllowedCase specifies a legitimate near-miss case (D4, P4).
+// AllowedCase specifies a legitimate near-miss case.
 // For lint/structure proofs, TargetPath + Content/SourceFile materializes a file in scope.
 // For test proofs, Selector names an executable legitimate neighboring test case.
 type AllowedCase struct {
@@ -59,7 +59,7 @@ type AllowedCase struct {
 	Selector   string `yaml:"selector,omitempty" json:"selector,omitempty"`
 }
 
-// CandidateSpec defines the candidate protection and its proof inputs (D4, §5.1).
+// CandidateSpec defines the candidate protection and its proof inputs.
 type CandidateSpec struct {
 	ID                   string            `yaml:"id" json:"id"`
 	Version              int               `yaml:"version" json:"version"`
@@ -98,7 +98,7 @@ type AllowedCaseResult struct {
 	Detail     string            `json:"detail,omitempty"`
 }
 
-// VerificationReport is the durable, reproducible artifact returned by `flinch prove` (§5.3, §9).
+// VerificationReport is the durable, reproducible artifact returned by `flinch prove`.
 type VerificationReport struct {
 	Schema           int                 `json:"schema"`
 	CandidateID      string              `json:"candidate_id"`

@@ -22,7 +22,7 @@ type Options struct {
 	Timeout time.Duration
 }
 
-// Verify runs the isolated §5 broken/fixed/candidate verification contract and returns
+// Verify runs the isolated broken/fixed/candidate verification contract and returns
 // a reproducible VerificationReport without modifying the user's working tree or Git index.
 func Verify(ctx context.Context, repoRoot string, spec CandidateSpec, opts Options) (VerificationReport, error) {
 	ctx = runner.WithCommandRepository(ctx, repoRoot)
@@ -451,7 +451,7 @@ func verifyLintOrStructure(ctx context.Context, repoRoot string, r reflex.Reflex
 	}
 	defer fixedWT.Cleanup(ctx)
 
-	// Apply the exact same candidate artifact to both isolated trees (§5.1).
+	// Apply the exact same candidate artifact to both isolated trees.
 	if err := applyCandidateToWorktree(ctx, brokenWT, spec); err != nil {
 		report.Verdict = VerdictInconclusive
 		report.Reason = ReasonSetupError
@@ -550,7 +550,7 @@ func verifyLintOrStructure(ctx context.Context, repoRoot string, r reflex.Reflex
 		return
 	}
 
-	// Verify every allowed near-miss case materialized at its in-scope product path (D4, P4).
+	// Verify every allowed near-miss case materialized at its in-scope product path.
 	if len(spec.AllowedCases) == 0 {
 		report.Verdict = VerdictInconclusive
 		report.Reason = ReasonMissingAllowedCase
@@ -1022,7 +1022,7 @@ func SelectedCases(cases []runner.TestCaseResult, selector string) []runner.Test
 	return matchTestCases(cases, selector)
 }
 
-// matchTestCases requires a non-empty selector and performs strict normalized exact matching (D4, D9).
+// matchTestCases requires a non-empty selector and performs strict normalized exact matching.
 // An empty selector never matches any test case.
 func matchTestCases(cases []runner.TestCaseResult, selector string) []runner.TestCaseResult {
 	sel := strings.TrimSpace(selector)

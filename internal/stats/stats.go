@@ -12,7 +12,7 @@ import (
 	"time"
 )
 
-// EventKind categorizes local enforcement and recurrence observations (§8.2).
+// EventKind categorizes local enforcement and recurrence observations.
 type EventKind string
 
 const (
@@ -21,7 +21,7 @@ const (
 	EventCIIntercepted      EventKind = "ci_intercepted"
 	EventConfirmedEscape    EventKind = "confirmed_escape"
 	EventUnexposedSurface   EventKind = "unexposed_surface"
-	EventPossibleRecurrence EventKind = "possible_recurrence" // excluded from confirmed escape numerator (§8.2)
+	EventPossibleRecurrence EventKind = "possible_recurrence" // excluded from confirmed escape numerator
 	EventCheckSkipped       EventKind = "check_skipped"
 )
 
@@ -36,7 +36,7 @@ type Event struct {
 	CommitSHA  string    `json:"commit_sha,omitempty"`
 }
 
-// Summary reports raw counts, explicit denominators, omissions, and latency percentiles (§8.2, §9).
+// Summary reports raw counts, explicit denominators, omissions, and latency percentiles.
 type Summary struct {
 	Schema                  int        `json:"schema"`
 	ObservedScope           string     `json:"observed_scope"`
