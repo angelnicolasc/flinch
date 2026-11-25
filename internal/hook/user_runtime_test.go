@@ -8,7 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -46,6 +46,26 @@ func hookFootprint(t *testing.T, root string) map[string]string {
 		t.Fatal(err)
 	}
 	return result
+}
+
+// footprintChanges lists the paths that were added, removed or rewritten, so a
+// failure names what changed instead of only reporting that something did.
+func footprintChanges(before, after map[string]string) []string {
+	var changed []string
+	for path, sum := range before {
+		if other, ok := after[path]; !ok {
+			changed = append(changed, "removed "+path)
+		} else if other != sum {
+			changed = append(changed, "rewritten "+path)
+		}
+	}
+	for path := range after {
+		if _, ok := before[path]; !ok {
+			changed = append(changed, "added "+path)
+		}
+	}
+	sort.Strings(changed)
+	return changed
 }
 
 func TestInactiveHookLeavesCheckoutAndGitObjectsUntouched(t *testing.T) {
@@ -98,8 +118,14 @@ func TestInactiveHookLeavesCheckoutAndGitObjectsUntouched(t *testing.T) {
 			t.Setenv("FLINCH_RECORD", "1")
 			data, _ := json.Marshal(map[string]any{"cwd": cwd, "workspacePaths": paths, "session_id": "trial", "prompt": "ordinary edit"})
 			got := Handle(context.Background(), HostClaude, "UserPromptSubmit", data, explicit)
-			if len(got.Stdout) != 0 || !reflect.DeepEqual(before, hookFootprint(t, repo)) || !reflect.DeepEqual(outside, hookFootprint(t, cwd)) {
-				t.Fatal("inactive hook changed the checkout, common Git directory, or host output")
+			if len(got.Stdout) != 0 {
+				t.Fatalf("inactive hook wrote host output: %s", got.Stdout)
+			}
+			if changed := footprintChanges(before, hookFootprint(t, repo)); len(changed) > 0 {
+				t.Fatalf("inactive hook changed the checkout or its Git directory: %v", changed)
+			}
+			if changed := footprintChanges(outside, hookFootprint(t, cwd)); len(changed) > 0 {
+				t.Fatalf("inactive hook changed the event directory: %v", changed)
 			}
 		})
 	}

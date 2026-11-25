@@ -57,7 +57,9 @@ func TestRetryDelay(t *testing.T) {
 	if _, _, err := gitutil.Run(ctx, repo, env, "add", "-A"); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := gitutil.Run(ctx, repo, env, "-c", "commit.gpgsign=false", "commit", "-m", "initial"); err != nil {
+	// Recent Git starts detached auto-maintenance after a commit. It can add and
+	// remove lock files under .git while a test compares the checkout's footprint.
+	if _, _, err := gitutil.Run(ctx, repo, env, "-c", "commit.gpgsign=false", "-c", "maintenance.auto=false", "-c", "gc.auto=0", "commit", "-m", "initial"); err != nil {
 		t.Fatal(err)
 	}
 	setupHookProfile(t, repo)
