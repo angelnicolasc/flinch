@@ -201,6 +201,22 @@ func TestRetryDelay(t *testing.T) {
 		productRegression()
 		allow(t, run(t, repo, func() { write(repo, "retry.go", brokenProduct+"\n// Unrelated change.\n") }))
 	})
+	t.Run("legacy_proof_measured_on_disk", func(t *testing.T) {
+		reset()
+		if err := os.Remove(record); err != nil {
+			t.Fatal(err)
+		}
+		// Older releases recorded the live file's identity after verification.
+		// A verified verdict alone cannot establish which revision supplied it.
+		legacy := *out.Reflex
+		legacy.ID = "legacy-zero"
+		path, err := reflex.Save(repo, legacy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Remove(path) })
+		allow(t, run(t, repo, productRegression))
+	})
 	t.Run("invalid_proof", func(t *testing.T) {
 		reset()
 		// The same ID and artifact cannot authorize a different contract. A

@@ -14,6 +14,8 @@ At Stop, Flinch first loads the records from the trusted revision as described i
 
 Each ID runs at most once. The trusted revision takes precedence when it contains the ID. For a checkout-only check, the opening snapshot supplies the record and protected case for the integrity comparison. The normal scope, test budget and comparison with the opening checkout still apply.
 
+The local receipt records the revision used to verify the artifact. Older receipts retain their runtime measurements for reviewed checks. An uncommitted check with an older receipt needs a new proof to qualify.
+
 ## Consequences
 
 The next turn can detect a regression or a change to the protected case before the developer commits. Discarding the uncommitted record before submitting a prompt removes it from that turn's snapshot. A linked worktree needs the matching record and artifact in its own snapshot to use the proof.

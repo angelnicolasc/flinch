@@ -324,12 +324,7 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 					res.SkippedControls = append(res.SkippedControls, SkippedControl{ReflexID: r.ID, Reason: "no qualifying fast pass at the turn checkpoint"})
 					continue
 				}
-				measurement := reflex.ProofSummary{}
-				if localProof != nil {
-					measurement = *localProof
-				}
-				measurement.RuntimeMS = elapsed
-				if err := reflex.SaveLocalProof(tctx, repoRoot, r, measurement, artifactRef); err != nil {
+				if err := reflex.SaveLocalTiming(tctx, repoRoot, r, elapsed, artifactRef); err != nil {
 					continue
 				}
 				measuredBaseline = &calibration
@@ -1031,7 +1026,7 @@ func FormatSARIF(res Result) ([]byte, error) {
 
 // A record from the opening snapshot can participate only with a local proof
 // of that same record and artifact. A reviewed ID always owns its contract.
-func loadVerifiedCheckoutChecks(ctx context.Context, repoRoot, snapshot string, reviewed []reflex.Reflex) ([]reflex.Reflex, map[string]*reflex.ProofSummary, error) {
+func loadVerifiedCheckoutChecks(ctx context.Context, repoRoot, snapshot string, reviewed []reflex.Reflex) ([]reflex.Reflex, map[string]*reflex.LocalProofReceipt, error) {
 	if snapshot == "" {
 		return nil, nil, nil
 	}
@@ -1044,13 +1039,13 @@ func loadVerifiedCheckoutChecks(ctx context.Context, repoRoot, snapshot string, 
 		reviewedIDs[r.ID] = true
 	}
 	var checks []reflex.Reflex
-	proofs := make(map[string]*reflex.ProofSummary)
+	proofs := make(map[string]*reflex.LocalProofReceipt)
 	for _, r := range atStart {
 		if reviewedIDs[r.ID] || !r.IsDeterministic() {
 			continue
 		}
 		proof, err := reflex.LocalProof(ctx, repoRoot, r, snapshot)
-		if err == nil && proof != nil && proof.Verdict == string(prove.VerdictVerified) {
+		if err == nil && proof.VerifiedForCheckout() {
 			checks = append(checks, r)
 			proofs[r.ID] = proof
 		}

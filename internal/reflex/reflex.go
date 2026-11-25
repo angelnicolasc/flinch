@@ -432,7 +432,7 @@ func SaveContext(ctx context.Context, repoRoot string, r Reflex, verifiedRef str
 				return "", err
 			}
 			if proof != nil {
-				if err := SaveLocalProof(ctx, repoRoot, r, *proof, verifiedRef); err != nil {
+				if err := saveLocalProof(ctx, repoRoot, r, *proof, verifiedRef); err != nil {
 					return "", err
 				}
 			}
@@ -457,7 +457,7 @@ func SaveContext(ctx context.Context, repoRoot string, r Reflex, verifiedRef str
 		return "", err
 	}
 	if proof != nil {
-		if err := SaveLocalProof(ctx, repoRoot, r, *proof, verifiedRef); err != nil {
+		if err := saveLocalProof(ctx, repoRoot, r, *proof, verifiedRef); err != nil {
 			return "", err
 		}
 	}
