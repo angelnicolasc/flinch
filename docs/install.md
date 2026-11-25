@@ -33,6 +33,7 @@ Confirm and run `flinch setup --yes`, then `flinch doctor`. Future upgrades use 
 
 Run this from the repository where you want to inspect the plan. It needs `curl`, `tar`, and the system SHA-256 utility. It installs to `$HOME/.local/bin/flinch` and prints the plan without changing any hooks.
 
+<!-- install-block: posix-archive -->
 ```sh
 (
   set -eu
@@ -82,6 +83,7 @@ After confirmation run `"$HOME/.local/bin/flinch" setup --yes` and `"$HOME/.loca
 
 Run this in PowerShell. It selects the architecture of Windows, verifies the downloaded ZIP, installs `%LOCALAPPDATA%\Flinch\bin\flinch.exe`, and prints the plan.
 
+<!-- install-block: windows-archive -->
 ```powershell
 $ErrorActionPreference = 'Stop'
 $arch = switch ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()) {

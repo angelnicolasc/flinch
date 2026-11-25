@@ -7,15 +7,18 @@ on:
 permissions:
   contents: read
 
+# Each job gets only the permissions its step needs. The build runs the tests
+# and compiles with read access. The attestation can request an OIDC token but
+# can't write the repository. The publish job can write releases but never
+# runs the project's code. The exact bytes built and attested travel between
+# jobs as one artifact.
 jobs:
-  release:
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     outputs:
       publish_packages: ${{ steps.packages.outputs.publish }}
-    permissions:
-      contents: write
-      id-token: write
-      attestations: write
     steps:
       - name: Check out the tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -36,26 +39,26 @@ jobs:
         run: |
           set -euo pipefail
           version=${TAG#v}
-          mkdir -p dist
+          mkdir -p release/dist
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
             os=${target%/*}
             arch=${target#*/}
             name="flinch_${version}_${os}_${arch}"
             ext=""
             if [ "$os" = windows ]; then ext=".exe"; fi
-            mkdir -p "dist/$name"
+            mkdir -p "release/dist/$name"
             CGO_ENABLED=0 GOOS=$os GOARCH=$arch go build -trimpath \
               -ldflags "-s -w -X github.com/angelnicolasc/flinch/internal/cli.Version=${version}" \
-              -o "dist/$name/flinch$ext" ./cmd/flinch
-            cp LICENSE README.md "dist/$name/"
+              -o "release/dist/$name/flinch$ext" ./cmd/flinch
+            cp LICENSE README.md "release/dist/$name/"
             if [ "$os" = windows ]; then
-              (cd dist && zip -qr "$name.zip" "$name")
+              (cd release/dist && zip -qr "$name.zip" "$name")
             else
-              tar -C dist -czf "dist/$name.tar.gz" "$name"
+              tar -C release/dist -czf "release/dist/$name.tar.gz" "$name"
             fi
-            rm -rf "dist/$name"
+            rm -rf "release/dist/$name"
           done
-          (cd dist && sha256sum -- *.tar.gz *.zip > checksums.txt)
+          (cd release/dist && sha256sum -- *.tar.gz *.zip > checksums.txt)
 
       - name: Prepare stable package-manager manifests
         id: packages
@@ -65,9 +68,9 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "$TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
-            go run ./scripts/releasemanifests "$TAG" dist/checksums.txt "$RUNNER_TEMP/package-manifests"
-            ruby -c "$RUNNER_TEMP/package-manifests/Formula/flinch.rb"
-            jq empty "$RUNNER_TEMP/package-manifests/flinch.json"
+            go run ./scripts/releasemanifests "$TAG" release/dist/checksums.txt release/manifests
+            ruby -c release/manifests/Formula/flinch.rb
+            jq empty release/manifests/flinch.json
             echo "publish=$HAS_PACKAGE_TOKEN" >> "$GITHUB_OUTPUT"
           fi
 
@@ -78,29 +81,76 @@ jobs:
         run: |
           set -euo pipefail
           version=${TAG#v}
+          notes=release/notes.md
           section() { awk -v h="## [$1]" 'index($0, h) == 1 {f = 1; next} f && /^## \[/ {exit} f' CHANGELOG.md; }
-          section "$version" > notes.md
-          if [ ! -s notes.md ] && [ "$version" != "${version%%-*}" ]; then
-            section Unreleased > notes.md
+          section "$version" > "$notes"
+          if [ ! -s "$notes" ] && [ "$version" != "${version%%-*}" ]; then
+            section Unreleased > "$notes"
           fi
-          if [ ! -s notes.md ]; then
+          if [ ! -s "$notes" ]; then
             echo "CHANGELOG.md has no section for $version" >&2
             exit 1
           fi
-          # The attestation step runs only for a public repository, so only then do the notes mention it.
-          printf '\n### Verify the download\n\nCompare each archive with `checksums.txt` (SHA-256).' >> notes.md
-          if [ "$PRIVATE_REPO" != true ]; then
-            printf ' To confirm where an archive was built, run `gh attestation verify <archive> --repo %s`.' "$GITHUB_REPOSITORY" >> notes.md
-          fi
-          printf '\n\nThe macOS binaries are not notarized. After extracting, run `xattr -d com.apple.quarantine flinch` once before the first run.\n' >> notes.md
+          # The attestation job runs only for a public repository, so only then
+          # do the notes mention it. The backticks are Markdown code spans.
+          # shellcheck disable=SC2016
+          {
+            printf '\n### Verify the download\n\nCompare each archive with `checksums.txt` (SHA-256).'
+            if [ "$PRIVATE_REPO" != true ]; then
+              printf ' To confirm where an archive was built, run `gh attestation verify <archive> --repo %s`.' "$GITHUB_REPOSITORY"
+            fi
+            printf '\n\nThe macOS binaries are not notarized. After extracting, run `xattr -d com.apple.quarantine flinch` once before the first run.\n'
+          } >> "$notes"
+
+      - name: Keep the release files
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release
+          path: release/
+          if-no-files-found: error
+          retention-days: 7
+
+  attest:
+    needs: build
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Get the release files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: release
+
+      - name: Check the archives against their checksums
+        run: cd release/dist && sha256sum --check --strict checksums.txt
 
       - name: Attest build provenance
-        if: ${{ !github.event.repository.private }}
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
-            dist/*.tar.gz
-            dist/*.zip
+            release/dist/*.tar.gz
+            release/dist/*.zip
+
+  publish:
+    needs: [build, attest]
+    # A private rehearsal skips the attestation, and the release still publishes.
+    if: ${{ always() && needs.build.result == 'success' && (needs.attest.result == 'success' || needs.attest.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Get the release files
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release
+          path: release
+
+      - name: Check the archives against their checksums
+        run: cd release/dist && sha256sum --check --strict checksums.txt
 
       - name: Publish the release
         env:
@@ -111,14 +161,15 @@ jobs:
           flags=()
           case "$TAG" in *-*) flags+=(--prerelease) ;; esac
           manifests=()
-          if [[ -d "$RUNNER_TEMP/package-manifests" ]]; then
-            manifests+=("$RUNNER_TEMP/package-manifests/Formula/flinch.rb" "$RUNNER_TEMP/package-manifests/flinch.json")
+          if [[ -d release/manifests ]]; then
+            manifests+=(release/manifests/Formula/flinch.rb release/manifests/flinch.json)
           fi
-          gh release create "$TAG" dist/* "${manifests[@]}" --title "$TAG" --notes-file notes.md --verify-tag "${flags[@]}"
+          gh release create "$TAG" release/dist/* "${manifests[@]}" --repo "$GITHUB_REPOSITORY" \
+            --title "$TAG" --notes-file release/notes.md --verify-tag "${flags[@]}"
 
   publish_packages:
-    needs: release
-    if: ${{ needs.release.outputs.publish_packages == 'true' }}
+    needs: [build, publish]
+    if: ${{ needs.build.outputs.publish_packages == 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

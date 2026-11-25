@@ -40,6 +40,14 @@ jobs:
           unformatted=$(gofmt -l cmd internal scripts)
           if [ -n "$unformatted" ]; then echo "$unformatted"; exit 1; fi
 
+      # Catches workflow syntax, expression and shell mistakes before they
+      # surface in a release or a weekly run.
+      - name: Lint the workflows
+        if: runner.os == 'Linux'
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$(go env GOPATH)/bin/actionlint"
+
       # Every integration Flinch supports runs for real on both systems. The
       # versions are pinned here; the weekly workflow tries the latest ones.
       - name: Set up Python
@@ -90,10 +98,10 @@ jobs:
         env:
           FLINCH_REQUIRE_TOOLS: '1'
         run: |
-          race=""
-          if [ "$RUNNER_OS" = Linux ]; then race="-race"; fi
+          flags=()
+          if [ "$RUNNER_OS" = Linux ]; then flags=(-race); fi
           set +e
-          go test $race -json -count=1 ./... > "$RUNNER_TEMP/go-test.json"
+          go test "${flags[@]}" -json -count=1 ./... > "$RUNNER_TEMP/go-test.json"
           tests=$?
           go run ./scripts/requiredtests -list .github/required-tests.txt -os "$RUNNER_OS" < "$RUNNER_TEMP/go-test.json"
           required=$?

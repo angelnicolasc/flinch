@@ -12,14 +12,21 @@ go vet ./...
 go test -count=1 ./...
 ```
 
-Some regression tests drive real Python and JavaScript runners. They skip when a tool is missing. To run them, install pytest, Ruff, Node.js, Vitest and Jest, and point Flinch at the JavaScript binaries:
+Some integration tests drive real tools: pytest, Ruff, Node.js, Vitest, Jest, ESLint, ast-grep and golangci-lint. Without a tool, its tests skip. To run them, install the tools and point Flinch at the JavaScript ones and golangci-lint:
 
 ```sh
 export FLINCH_REAL_VITEST=/path/to/node_modules/.bin/vitest
 export FLINCH_REAL_JEST=/path/to/node_modules/.bin/jest
+export FLINCH_REAL_ESLINT=/path/to/node_modules/.bin/eslint
+export FLINCH_REAL_AST_GREP=/path/to/node_modules/.bin/ast-grep
+export FLINCH_REAL_GOLANGCI_LINT=/path/to/golangci-lint
 ```
 
-CI installs the versions it tests against, listed in [`.github/workflows/ci.yml`](.github/workflows/ci.yml), and runs the suite on Linux and Windows.
+Set `FLINCH_REQUIRE_TOOLS=1` to turn a missing tool into a failure instead of a skip.
+
+CI installs the pinned versions listed in [`.github/workflows/ci.yml`](.github/workflows/ci.yml) and runs the suite on Linux and Windows with `FLINCH_REQUIRE_TOOLS=1`. The job also fails if any integration test listed in [`.github/required-tests.txt`](.github/required-tests.txt) is missing, skipped or failing. When you add an integration test, add it there.
+
+The fuzz tests' seeds run as ordinary tests. To explore further, run one target, for example `go test ./internal/gitutil -run '^$' -fuzz '^FuzzLocalPath$' -fuzztime 60s`. Every Monday, [`.github/workflows/weekly.yml`](.github/workflows/weekly.yml) fuzzes each target, runs the suite with the latest release of each tool, and installs the latest Flinch release through every documented channel.
 
 ## Where things live
 

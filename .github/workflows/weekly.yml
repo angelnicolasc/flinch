@@ -1,0 +1,261 @@
+name: Weekly
+
+# Watches for what can break Flinch without a change in this repository: an
+# input the fuzzers haven't met yet, a new version of a tool Flinch reads, and
+# the published install paths. Results land in each run's summary for a person
+# to review. Nothing here can write to the repository.
+on:
+  schedule:
+    - cron: '17 6 * * 1' # Mondays, off the top of the hour
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: 'internal/gitutil FuzzLocalPath' }
+          - { os: windows-latest, target: 'internal/gitutil FuzzLocalPath' }
+          - { os: ubuntu-latest, target: 'internal/runner FuzzLiteralCommandWords' }
+          - { os: windows-latest, target: 'internal/runner FuzzLiteralCommandWords' }
+          - { os: ubuntu-latest, target: 'internal/workspacetrust FuzzLinkedWorktreePointer' }
+          - { os: windows-latest, target: 'internal/workspacetrust FuzzLinkedWorktreePointer' }
+          - { os: ubuntu-latest, target: 'internal/runner FuzzTestReportParsers' }
+          - { os: ubuntu-latest, target: 'internal/runner FuzzTestOutcomesSurviveEachFormat' }
+          - { os: ubuntu-latest, target: 'internal/runner FuzzLinterReportParsers' }
+          - { os: ubuntu-latest, target: 'internal/runner FuzzRuffFindingsKeepRuleAndPosition' }
+          - { os: ubuntu-latest, target: 'internal/reflex FuzzParseBytesRoundTrip' }
+          - { os: ubuntu-latest, target: 'internal/config FuzzLoadFileRoundTrip' }
+          - { os: ubuntu-latest, target: 'internal/author FuzzManagedLineInsertion' }
+          - { os: ubuntu-latest, target: 'internal/hook FuzzHandleWithoutConsent' }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Fuzz for a minute
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          read -r pkg name <<< "$TARGET"
+          # A renamed target would otherwise pass by fuzzing nothing.
+          go test "./$pkg" -list "^${name}\$" | grep -qx "$name" || { echo "::error::$name is not in $pkg"; exit 1; }
+          go test "./$pkg" -run '^$' -fuzz "^${name}\$" -fuzztime 60s
+
+      # Every input below testdata/fuzz is synthetic, made by the fuzzer.
+      - name: Keep the input that failed
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-failure-${{ strategy.job-index }}
+          path: internal/**/testdata/fuzz/
+          if-no-files-found: ignore
+          retention-days: 5
+
+  latest-tools:
+    # One tool moves to its latest release per job, against the versions CI
+    # pins for everything else, so a failure names the tool that changed.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        tool: [pytest, ruff, vitest, jest, eslint, ast-grep, golangci-lint]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.12'
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22.20.0'
+
+      - name: Install the pinned tools and the latest ${{ matrix.tool }}
+        env:
+          TOOL: ${{ matrix.tool }}
+        run: |
+          set -euo pipefail
+          py=(pytest==8.4.2 ruff==0.15.11)
+          js=(vitest@3.2.4 jest@29.7.0 eslint@10.15.0 @ast-grep/cli@0.51.3)
+          golangci=v2.15.0
+          case "$TOOL" in
+            pytest) py[0]=pytest ;;
+            ruff) py[1]=ruff ;;
+            vitest) js[0]=vitest@latest ;;
+            jest) js[1]=jest@latest ;;
+            eslint) js[2]=eslint@latest ;;
+            ast-grep) js[3]=@ast-grep/cli@latest ;;
+            golangci-lint) golangci=latest ;;
+          esac
+          python -m pip install --upgrade "${py[@]}"
+          npm install --prefix "$RUNNER_TEMP/flinch-js" --no-audit --no-fund "${js[@]}"
+          go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$golangci"
+          bin="$RUNNER_TEMP/flinch-js/node_modules/.bin"
+          ext="" exe=""
+          if [ "$RUNNER_OS" = Windows ]; then ext=".cmd" exe=".exe"; fi
+          golangci_bin="$(go env GOPATH)/bin/golangci-lint$exe"
+          {
+            echo "FLINCH_REAL_VITEST=$bin/vitest$ext"
+            echo "FLINCH_REAL_JEST=$bin/jest$ext"
+            echo "FLINCH_REAL_ESLINT=$bin/eslint$ext"
+            echo "FLINCH_REAL_AST_GREP=$bin/ast-grep$ext"
+            echo "FLINCH_REAL_GOLANGCI_LINT=$golangci_bin"
+          } >> "$GITHUB_ENV"
+          {
+            echo "### Latest $TOOL on $RUNNER_OS"
+            echo '```'
+            pytest --version 2>&1 | head -1
+            ruff --version
+            echo "vitest $("$bin/vitest$ext" --version)"
+            echo "jest $("$bin/jest$ext" --version)"
+            echo "eslint $("$bin/eslint$ext" --version)"
+            echo "ast-grep $("$bin/ast-grep$ext" --version)"
+            "$golangci_bin" --version
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Run the suite
+        env:
+          FLINCH_REQUIRE_TOOLS: '1'
+        run: |
+          set +e
+          go test -json -count=1 ./... > "$RUNNER_TEMP/go-test.json"
+          tests=$?
+          go run ./scripts/requiredtests -list .github/required-tests.txt -os "$RUNNER_OS" < "$RUNNER_TEMP/go-test.json" | tee -a "$GITHUB_STEP_SUMMARY"
+          required=${PIPESTATUS[0]}
+          if [ "$tests" -ne 0 ] || [ "$required" -ne 0 ]; then exit 1; fi
+
+  release-smoke:
+    # Installs the latest published release the way docs/install.md and the
+    # README tell a reader to, on a clean runner with an isolated profile.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, channel: archive }
+          - { os: macos-latest, channel: archive }
+          - { os: windows-latest, channel: archive }
+          - { os: ubuntu-latest, channel: homebrew }
+          - { os: macos-latest, channel: homebrew }
+          - { os: windows-latest, channel: scoop }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      # The profile has a Claude Code directory so setup detects a host, and
+      # nothing outside it is read or written.
+      - name: Find the latest release and isolate the profile
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name)
+          home="$RUNNER_TEMP/smoke-home"
+          mkdir -p "$home/.claude" "$home/.config" "$home/local"
+          {
+            echo "TAG=$tag"
+            echo "VERSION=${tag#v}"
+            echo "SMOKE_HOME=$home"
+          } >> "$GITHUB_ENV"
+
+      - name: Install with the guide's archive block (Linux and macOS)
+        if: matrix.channel == 'archive' && runner.os != 'Windows'
+        run: |
+          set -euo pipefail
+          go run ./scripts/installblock -marker posix-archive -lang sh docs/install.md > "$RUNNER_TEMP/install.sh"
+          repo=$(mktemp -d) && git init -q "$repo" && cd "$repo"
+          HOME="$SMOKE_HOME" XDG_CONFIG_HOME="$SMOKE_HOME/.config" sh "$RUNNER_TEMP/install.sh"
+          echo "FLINCH=$SMOKE_HOME/.local/bin/flinch" >> "$GITHUB_ENV"
+
+      - name: Install with the guide's archive block (Windows)
+        if: matrix.channel == 'archive' && runner.os == 'Windows'
+        run: |
+          set -euo pipefail
+          go run ./scripts/installblock -marker windows-archive -lang powershell docs/install.md > "$RUNNER_TEMP/install.ps1"
+          repo="$RUNNER_TEMP/smoke-repo" && git init -q "$repo" && cd "$repo"
+          USERPROFILE="$SMOKE_HOME" HOME="$SMOKE_HOME" LOCALAPPDATA="$SMOKE_HOME/local" pwsh -NoProfile -File "$RUNNER_TEMP/install.ps1"
+          echo "FLINCH=$SMOKE_HOME/local/Flinch/bin/flinch.exe" >> "$GITHUB_ENV"
+
+      - name: Install with Homebrew
+        if: matrix.channel == 'homebrew'
+        run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = Linux ]; then eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"; fi
+          brew install angelnicolasc/tap/flinch
+          echo "FLINCH=$(brew --prefix)/bin/flinch" >> "$GITHUB_ENV"
+
+      - name: Install with Scoop
+        if: matrix.channel == 'scoop'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Invoke-Expression "& {$(Invoke-RestMethod get.scoop.sh)} -RunAsAdmin"
+          $shims = Join-Path $env:USERPROFILE 'scoop\shims'
+          & (Join-Path $shims 'scoop.cmd') bucket add angelnicolasc https://github.com/angelnicolasc/scoop-bucket
+          & (Join-Path $shims 'scoop.cmd') install angelnicolasc/flinch
+          "FLINCH=$(Join-Path $shims 'flinch.exe')" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Check the installed release
+        env:
+          CHANNEL: ${{ matrix.channel }}
+        run: |
+          set -euo pipefail
+          got=$("$FLINCH" version)
+          if [ "$got" != "flinch $VERSION" ]; then
+            echo "::error::$CHANNEL installed '$got', want 'flinch $VERSION'"
+            exit 1
+          fi
+          repo="$RUNNER_TEMP/check-repo"
+          git init -q "$repo"
+          cd "$repo"
+          export HOME="$SMOKE_HOME" USERPROFILE="$SMOKE_HOME" XDG_CONFIG_HOME="$SMOKE_HOME/.config" \
+            LOCALAPPDATA="$SMOKE_HOME/local" CODEX_HOME="$SMOKE_HOME/.codex"
+          "$FLINCH" setup --host claude --plan > "$RUNNER_TEMP/plan.txt"
+          grep -q "settings.json" "$RUNNER_TEMP/plan.txt" || { cat "$RUNNER_TEMP/plan.txt"; echo "::error::the plan names no Claude settings file"; exit 1; }
+          "$FLINCH" doctor --json > "$RUNNER_TEMP/doctor.json"
+          jq -e '[.hosts[] | select(.host == "claude")] | length == 1' "$RUNNER_TEMP/doctor.json" > /dev/null
+          echo "- $CHANNEL on $RUNNER_OS: installed $got, setup plan and doctor answered" >> "$GITHUB_STEP_SUMMARY"
