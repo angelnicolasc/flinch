@@ -385,8 +385,7 @@ func goChildRegions(parent string, body *ast.BlockStmt, add func(string, ast.Nod
 		case *ast.FuncLit:
 			return false // A nested callback owns its own subtests.
 		case *ast.CallExpr:
-			sel, ok := n.Fun.(*ast.SelectorExpr)
-			if ok && sel.Sel.Name == "Run" && len(n.Args) >= 2 {
+			if goRunCallback(n) != nil {
 				_, literal := n.Args[0].(*ast.BasicLit)
 				hasTableRun = !literal
 			}
@@ -396,8 +395,8 @@ func goChildRegions(parent string, body *ast.BlockStmt, add func(string, ast.Nod
 	ast.Inspect(body, func(node ast.Node) bool {
 		switch n := node.(type) {
 		case *ast.CallExpr:
-			sel, ok := n.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel.Name != "Run" || len(n.Args) < 2 {
+			callback := goRunCallback(n)
+			if callback == nil {
 				return true
 			}
 			lit, ok := n.Args[0].(*ast.BasicLit)
@@ -409,8 +408,7 @@ func goChildRegions(parent string, body *ast.BlockStmt, add func(string, ast.Nod
 				return true
 			}
 			selector := parent + "/" + strings.ReplaceAll(strings.TrimSpace(name), " ", "_")
-			callback, ok := n.Args[1].(*ast.FuncLit)
-			if !ok || !goChildRegions(selector, callback.Body, add) {
+			if !goChildRegions(selector, callback.Body, add) {
 				add(selector, n)
 			}
 			found = true
@@ -437,6 +435,15 @@ func goChildRegions(parent string, body *ast.BlockStmt, add func(string, ast.Nod
 		return true
 	})
 	return found
+}
+
+func goRunCallback(call *ast.CallExpr) *ast.FuncLit {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "Run" || len(call.Args) != 2 {
+		return nil
+	}
+	callback, _ := call.Args[1].(*ast.FuncLit)
+	return callback
 }
 
 func extractGoTableCaseName(elt ast.Expr) (string, bool) {
