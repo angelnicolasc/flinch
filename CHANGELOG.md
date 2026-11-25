@@ -6,13 +6,13 @@ All notable changes to Flinch are recorded here. The format follows [Keep a Chan
 
 ### Fixed
 
+- Stop can return a regression before the fix is committed. A check proven in the clone applies while its record and protected case match at the start of a turn, including after edits to sibling tests. Editing the protected case or deleting its record during that turn triggers an integrity finding.
 - Stop detects a suppression restored during a turn even when another check was already committed. A directive added against both the reviewed and opening revisions appears once.
 - `flinch check --ci --base` reports an error before running checks if the requested revision is missing.
 
 - Stop and CI read direct check records from Git, including IDs with non-ASCII characters. Records stored in archive subdirectories stay outside the catalog.
 
 - `flinch check --ci --base` reports a deleted check record from the PR base and exits with status 1. Previously, CI looked for records in the proposed checkout, so deleting a record also removed it from the integrity check.
-- Stop can return a regression before the fix is committed. A check proven in the clone applies when its record and matching artifact are present at the start of the next turn. Editing the protected case or deleting its record during that turn triggers an integrity finding.
 
 ## [0.1.2] - 2026-11-25
 

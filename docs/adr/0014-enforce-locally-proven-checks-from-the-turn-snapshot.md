@@ -10,11 +10,11 @@ A developer can correct an agent and ask for another edit before committing the 
 
 ## Decision
 
-At Stop, Flinch first loads the records from the trusted revision as described in [ADR 0010](0010-keep-the-reviewed-check-in-the-comparison.md). It also reads the records present in the snapshot taken when the developer submitted the prompt. A record found only there qualifies if the clone has a verified proof for the same contract and artifact contents. Text with LF and CRLF line endings has the same local proof identity.
+At Stop, Flinch first loads the records from the trusted revision as described in [ADR 0010](0010-keep-the-reviewed-check-in-the-comparison.md). It also reads the records present in the snapshot taken when the developer submitted the prompt. A record found only there qualifies if the clone has a verified proof for the same contract and the protected case is intact relative to the verified revision. As in ADR 0010, this comparison covers the case and its test skeleton. Shared helpers outside that region can change independently. Text with LF and CRLF line endings has the same local proof identity.
 
 Each ID runs at most once. The trusted revision takes precedence when it contains the ID. For a checkout-only check, the opening snapshot supplies the record and protected case for the integrity comparison. The normal scope, test budget and comparison with the opening checkout still apply.
 
-The local receipt records the revision used to verify the artifact. Older receipts retain their runtime measurements for reviewed checks. An uncommitted check with an older receipt needs a new proof to qualify.
+The local receipt records the revision used to verify the artifact. The local proof store indexes verified receipts by stable record so edits to a sibling case can retain the original proof. A receipt that predates the index still qualifies if it identifies the verified revision and matches the record and artifact from that revision. Receipts without a verified revision supply runtime measurements only.
 
 ## Consequences
 

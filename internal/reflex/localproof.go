@@ -7,8 +7,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/angelnicolasc/flinch/internal/gitutil"
@@ -66,6 +69,10 @@ func LocalProof(ctx context.Context, repoRoot string, r Reflex, artifactRef stri
 	if err != nil {
 		return nil, err
 	}
+	return exactLocalProof(stateDir, r, artifact)
+}
+
+func exactLocalProof(stateDir string, r Reflex, artifact []byte) (*LocalProofReceipt, error) {
 	proof, err := readLocalProof(stateDir, r, artifact)
 	if err != nil || proof != nil || !bytes.Contains(artifact, []byte("\n")) {
 		return proof, err
@@ -80,6 +87,10 @@ func readLocalProof(stateDir string, r Reflex, artifact []byte) (*LocalProofRece
 	if err != nil {
 		return nil, err
 	}
+	return readReceipt(path)
+}
+
+func readReceipt(path string) (*LocalProofReceipt, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -92,6 +103,88 @@ func readLocalProof(stateDir string, r Reflex, artifact []byte) (*LocalProofRece
 		return nil, err
 	}
 	return &proof, nil
+}
+
+// LocalProofIndex serves one checkout inspection. Its first inexact lookup
+// reads the index directory once, including receipts that predate the index.
+type LocalProofIndex struct {
+	byRecord map[string][]string
+	previous []string
+	receipts map[string]*LocalProofReceipt
+}
+
+func (idx *LocalProofIndex) load(dir string) {
+	store := os.DirFS(dir)
+	indexed, _ := fs.Glob(store, "by-record/*.json")
+	receipts, _ := fs.Glob(store, "*.json")
+	idx.byRecord = make(map[string][]string)
+	idx.receipts = make(map[string]*LocalProofReceipt)
+	seen := make(map[string]bool)
+	for _, entry := range indexed {
+		record, name, ok := strings.Cut(filepath.Base(entry), "_")
+		if ok {
+			idx.byRecord[record] = append(idx.byRecord[record], name)
+			seen[name] = true
+		}
+	}
+	for _, name := range receipts {
+		if !seen[name] {
+			idx.previous = append(idx.previous, name)
+		}
+	}
+}
+
+// Verified finds a local proof for this record whose protected case is intact.
+func (idx *LocalProofIndex) Verified(ctx context.Context, repoRoot string, r Reflex, ref string, intact func(Reflex, []byte, []byte) (bool, string)) (*LocalProofReceipt, error) {
+	current, err := localProofArtifact(ctx, repoRoot, r, ref)
+	if err != nil {
+		return nil, err
+	}
+	stateDir, err := gitutil.FlinchStateDir(ctx, repoRoot)
+	if err != nil {
+		return nil, err
+	}
+	exact, err := exactLocalProof(stateDir, r, current)
+	if err != nil || exact.VerifiedForCheckout() {
+		return exact, err
+	}
+	if r.Artifact.Path == "" || current == nil {
+		return nil, nil
+	}
+	dir := filepath.Join(stateDir, "proofs")
+	if idx.byRecord == nil {
+		idx.load(dir)
+	}
+	key, err := localProofPath(stateDir, r, nil)
+	if err != nil {
+		return nil, err
+	}
+	for _, name := range slices.Concat(idx.byRecord[filepath.Base(key)], idx.previous) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		proof, seen := idx.receipts[name]
+		if !seen {
+			proof, _ = readReceipt(filepath.Join(dir, name))
+			idx.receipts[name] = proof
+		}
+		if !proof.VerifiedForCheckout() {
+			continue
+		}
+		original, err := localProofArtifact(ctx, repoRoot, r, proof.VerifiedRef)
+		if err != nil {
+			continue
+		}
+		// Bind even a pre-index receipt to the complete stable record.
+		path, err := localProofPath(stateDir, r, original)
+		if err != nil || filepath.Base(path) != name {
+			continue
+		}
+		if ok, _ := intact(r, original, current); ok {
+			return proof, nil
+		}
+	}
+	return nil, nil
 }
 
 // SaveLocalTiming records a bounded runtime without changing the evidence that established a check.
@@ -173,6 +266,20 @@ func saveLocalReceipt(ctx context.Context, repoRoot string, r Reflex, receipt Lo
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if receipt.VerifiedForCheckout() {
+		key, err := localProofPath(stateDir, r, nil)
+		if err != nil {
+			return err
+		}
+		indexDir := filepath.Join(dir, "by-record")
+		if err := os.MkdirAll(indexDir, 0o700); err != nil {
+			return err
+		}
+		name := filepath.Base(key) + "_" + filepath.Base(path)
+		if err := os.WriteFile(filepath.Join(indexDir, name), nil, 0o600); err != nil {
+			return err
+		}
 	}
 	return os.Rename(f.Name(), path)
 }

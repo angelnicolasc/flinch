@@ -1030,7 +1030,7 @@ func FormatSARIF(res Result) ([]byte, error) {
 }
 
 // A record from the opening snapshot can participate only with a local proof
-// of that same record and artifact. A reviewed ID always owns its contract.
+// of that same record and protected case. A reviewed ID always owns its contract.
 func loadVerifiedCheckoutChecks(ctx context.Context, repoRoot, snapshot string, reviewed []reflex.Reflex) ([]reflex.Reflex, map[string]*reflex.LocalProofReceipt, error) {
 	if snapshot == "" {
 		return nil, nil, nil
@@ -1045,11 +1045,12 @@ func loadVerifiedCheckoutChecks(ctx context.Context, repoRoot, snapshot string, 
 	}
 	var checks []reflex.Reflex
 	proofs := make(map[string]*reflex.LocalProofReceipt)
+	var index reflex.LocalProofIndex
 	for _, r := range atStart {
 		if reviewedIDs[r.ID] || !r.IsDeterministic() {
 			continue
 		}
-		proof, err := reflex.LocalProof(ctx, repoRoot, r, snapshot)
+		proof, err := index.Verified(ctx, repoRoot, r, snapshot, artifactCaseIntact)
 		if err == nil && proof.VerifiedForCheckout() {
 			checks = append(checks, r)
 			proofs[r.ID] = proof

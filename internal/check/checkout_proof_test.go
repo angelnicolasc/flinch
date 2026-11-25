@@ -181,12 +181,58 @@ func TestRetryDelay(t *testing.T) {
 			write(repo, "retry_test.go", strings.Replace(fixedTest, row, row+"\n\t\t{\"another_default\", nil, 1},", 1))
 		}))
 	})
+	for _, stage := range []string{"E", "F"} {
+		t.Run("sibling_then_regression_"+stage, func(t *testing.T) {
+			reset()
+			withSibling := strings.Replace(fixedTest, row, row+"\n\t\t{\"other_default\", nil, 1},", 1)
+			allow(t, run(t, repo, func() { write(repo, "retry_test.go", withSibling) }))
+			if stage == "F" {
+				another := strings.Replace(withSibling, row, row+"\n\t\t{\"default_again\", nil, 1},", 1)
+				allow(t, run(t, repo, func() { write(repo, "retry_test.go", another) }))
+			}
+			requireCase(t, run(t, repo, productRegression))
+		})
+	}
 	t.Run("discard_before_prompt", func(t *testing.T) {
 		reset()
 		if err := os.Remove(record); err != nil {
 			t.Fatal(err)
 		}
 		write(repo, "retry_test.go", baseTest)
+		allow(t, run(t, repo, productRegression))
+	})
+	t.Run("pre_index_verified_receipt", func(t *testing.T) {
+		reset()
+		stateDir, err := gitutil.FlinchStateDir(ctx, repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Leave the exact receipt from the verifier in the old store layout.
+		index := filepath.Join(stateDir, "proofs", "by-record")
+		backup := filepath.Join(stateDir, "old-index")
+		if err := os.Rename(index, backup); err == nil {
+			defer func() {
+				if err := os.Rename(backup, index); err != nil {
+					t.Fatal(err)
+				}
+			}()
+		} else if !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+		sibling := strings.Replace(fixedTest, row, row+"\n\t\t{\"other_default\", nil, 1},", 1)
+		write(repo, "retry_test.go", sibling)
+		requireCase(t, run(t, repo, productRegression))
+		reset()
+		write(repo, "retry_test.go", sibling)
+		changed := *out.Reflex
+		changed.Proof = nil
+		changed.Obligation = "A different contract for the same selector."
+		if err := os.Remove(record); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := reflex.Save(repo, changed); err != nil {
+			t.Fatal(err)
+		}
 		allow(t, run(t, repo, productRegression))
 	})
 	t.Run("other_worktree", func(t *testing.T) {
