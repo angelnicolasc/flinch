@@ -53,6 +53,67 @@ func TestExecutableUpdateKeepsCodexDefinition(t *testing.T) {
 	}
 }
 
+// On Apple Silicon, Homebrew's prefix /opt/homebrew is its own Git checkout.
+// A formula in its Cellar is outside any project checkout; anything else in
+// a checkout is still inside one.
+func TestHomebrewCellarInItsOwnRepositoryIsOutsideACheckout(t *testing.T) {
+	homebrew := func(t *testing.T, prefix string) string {
+		t.Helper()
+		for _, dir := range []string{".git", filepath.Join("Library", "Homebrew")} {
+			if err := os.MkdirAll(filepath.Join(prefix, dir), 0700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		bin := filepath.Join(prefix, "Cellar", "flinch", "0.1.2", "bin", "flinch")
+		writeFixture(t, bin, []byte("flinch"))
+		return bin
+	}
+	prefix := t.TempDir()
+	bin := homebrew(t, prefix)
+	if !outsideCheckout(bin, "") {
+		t.Fatalf("a Homebrew keg counted as inside a checkout: %s", bin)
+	}
+	tracked := filepath.Join(prefix, "Library", "Homebrew", "flinch")
+	writeFixture(t, tracked, []byte("flinch"))
+	if outsideCheckout(tracked, "") {
+		t.Fatalf("a file in Homebrew's own checkout counted as outside it: %s", tracked)
+	}
+	t.Run("stable link", func(t *testing.T) {
+		stable := filepath.Join(prefix, "opt", "flinch")
+		if err := os.MkdirAll(filepath.Dir(stable), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Dir(filepath.Dir(bin)), stable); err != nil {
+			t.Skipf("symlinks unavailable here: %v", err)
+		}
+		path, err := stableBinaryFor(bin, bin)
+		if err != nil || path != filepath.Join(stable, "bin", "flinch") || !outsideCheckout(path, "") {
+			t.Fatalf("setup can't register the stable Homebrew link %q: %v", path, err)
+		}
+	})
+	t.Run("ordinary checkout", func(t *testing.T) {
+		project := t.TempDir()
+		if err := os.Mkdir(filepath.Join(project, ".git"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		cellar := filepath.Join(project, "Cellar", "flinch", "0.1.2", "bin", "flinch")
+		writeFixture(t, cellar, []byte("flinch"))
+		if outsideCheckout(cellar, "") {
+			t.Fatalf("a Cellar in a checkout that isn't Homebrew's counted as outside it: %s", cellar)
+		}
+	})
+	t.Run("homebrew inside a project", func(t *testing.T) {
+		project := t.TempDir()
+		if err := os.Mkdir(filepath.Join(project, ".git"), 0700); err != nil {
+			t.Fatal(err)
+		}
+		nested := homebrew(t, filepath.Join(project, "homebrew"))
+		if outsideCheckout(nested, "") {
+			t.Fatalf("a Homebrew prefix inside a project counted as outside it: %s", nested)
+		}
+	})
+}
+
 func TestConsentRejectsCheckoutControlledFiles(t *testing.T) {
 	checkout := t.TempDir()
 	if err := os.Mkdir(filepath.Join(checkout, ".git"), 0700); err != nil {

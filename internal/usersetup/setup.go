@@ -119,13 +119,27 @@ func outsideCheckout(path, repo string) bool {
 		}
 	}
 	for dir := filepath.Dir(p); ; dir = filepath.Dir(dir) {
-		if _, err := os.Lstat(filepath.Join(dir, ".git")); !os.IsNotExist(err) {
+		if _, err := os.Lstat(filepath.Join(dir, ".git")); !os.IsNotExist(err) && !inHomebrewCellar(dir, p) {
 			return false
 		}
 		if dir == filepath.Dir(dir) {
 			return true
 		}
 	}
+}
+
+// inHomebrewCellar reports whether path is inside the Cellar of a Homebrew
+// repository at dir. On Apple Silicon, Homebrew's prefix /opt/homebrew is
+// also its own Git checkout, and every installed formula lives in its
+// Cellar, which that checkout doesn't track. Any other path in a checkout,
+// or a Cellar in a repository that isn't Homebrew's, still counts as inside.
+func inHomebrewCellar(dir, path string) bool {
+	rel, err := filepath.Rel(filepath.Join(dir, "Cellar"), path)
+	if err != nil || !filepath.IsLocal(rel) {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(dir, "Library", "Homebrew"))
+	return err == nil && info.IsDir()
 }
 
 func loadConsent() (fileChange, consent, error) {
