@@ -20,8 +20,31 @@ import (
 	"github.com/angelnicolasc/flinch/internal/usersetup"
 )
 
+// maxHookPayload bounds how much a host event can make the hook buffer. A
+// larger event is not handled, so the turn continues without Flinch.
+const maxHookPayload = 16 << 20
+
+// hookDelivery holds what a hook invocation reads and calls. Tests replace it
+// per invocation instead of through package state, because a worker can
+// outlive a delivery that timed out.
+type hookDelivery struct {
+	stdin      io.Reader
+	handle     func(ctx context.Context, host hook.Host, event string, stdin []byte, repo string) hook.Response
+	registered func(host, event string) bool
+}
+
 func runHook(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	return runHookDelivery(ctx, args, stdout, hookDelivery{stdin: os.Stdin, handle: hook.Handle, registered: usersetup.UserHookRegistered})
+}
+
+// runHookDelivery answers one host event. Whatever happens inside Flinch, the
+// host gets either Flinch's decision or that host's allow response, exactly
+// once, with exit code 0 and nothing on stderr. In Claude Code and Codex a
+// nonzero exit with text on stderr would block the user's prompt or keep the
+// agent working.
+func runHookDelivery(ctx context.Context, args []string, stdout io.Writer, in hookDelivery) int {
 	started := time.Now()
+	ignoreBrokenPipe()
 	fs := flag.NewFlagSet("hook", flag.ContinueOnError)
 	fs.SetOutput(io.Discard) // Hooks fail open silently.
 	hostStr := fs.String("host", "", "host adapter: claude | codex | antigravity")
@@ -35,54 +58,88 @@ func runHook(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	ctx, cancel := hook.WithBudget(ctx, *eventStr, started)
 	defer cancel()
 	host := hook.Host(strings.ToLower(strings.TrimSpace(*hostStr)))
+	allow := hook.AllowResponse(host)
 	result := make(chan hook.Response, 1)
-	go func(r *os.File) {
-		if deadline, ok := ctx.Deadline(); ok {
-			if err := r.SetReadDeadline(deadline); err == nil {
-				defer r.SetReadDeadline(time.Time{})
+	go func() {
+		resp, stage := allow, "read"
+		// The worker publishes exactly one response, and a recovered failure
+		// publishes the allow response.
+		defer func() {
+			if recover() != nil {
+				resp = allow
+				hook.RecordIncident(ctx, string(host), *eventStr, stage, Version)
+			}
+			result <- resp
+		}()
+		if file, ok := in.stdin.(*os.File); ok {
+			if deadline, ok := ctx.Deadline(); ok {
+				if err := file.SetReadDeadline(deadline); err == nil {
+					defer file.SetReadDeadline(time.Time{})
+				}
 			}
 		}
-		data, err := io.ReadAll(r)
-		if err != nil {
-			data = nil
-		}
-		if !*userHook && usersetup.UserHookRegistered(string(host), *eventStr) {
-			result <- hook.AllowResponse(host)
+		data, err := io.ReadAll(io.LimitReader(in.stdin, maxHookPayload+1))
+		if err != nil || len(data) > maxHookPayload {
 			return
 		}
-		result <- hook.Handle(ctx, host, *eventStr, data, *repoDir)
-	}(os.Stdin)
+		stage = "registration"
+		if !*userHook && in.registered(string(host), *eventStr) {
+			return
+		}
+		stage = "handle"
+		resp = in.handle(ctx, host, *eventStr, data, *repoDir)
+	}()
 	var resp hook.Response
 	select {
 	case resp = <-result:
+		// A decision that arrives after the budget ran out is dropped, so the
+		// turn finishes as the budget promises.
+		if ctx.Err() != nil {
+			resp = allow
+		}
 	case <-ctx.Done():
 		// Filesystems and some host pipes do not support cancellation of an
 		// in-flight operation. The CLI must still release the host on time.
-		resp = hook.AllowResponse(host)
+		resp = allow
 	}
-	if len(resp.Stdout) > 0 {
-		if file, ok := stdout.(*os.File); ok {
-			deadline := hook.ResponseDeadline(ctx)
-			if err := file.SetWriteDeadline(deadline); err != nil {
-				// Some inherited Windows handles do not support I/O deadlines.
-				// Let the CLI exit on time even if the host stops reading its pipe.
-				done := make(chan struct{})
-				go func() {
-					_, _ = file.Write(resp.Stdout)
-					close(done)
-				}()
-				timer := time.NewTimer(time.Until(deadline))
-				defer timer.Stop()
-				select {
-				case <-done:
-				case <-timer.C:
-				}
-				return resp.ExitCode
-			}
-			defer file.SetWriteDeadline(time.Time{})
+	return writeHookResponse(ctx, host, *eventStr, stdout, resp)
+}
+
+// writeHookResponse sends the prepared response once. A partial or uncertain
+// delivery is never followed by a second message, because the host would read
+// the two concatenated.
+func writeHookResponse(ctx context.Context, host hook.Host, event string, stdout io.Writer, resp hook.Response) (code int) {
+	defer func() {
+		if recover() != nil {
+			hook.RecordIncident(ctx, string(host), event, "write", Version)
+			code = 0
 		}
-		_, _ = stdout.Write(resp.Stdout)
+	}()
+	if len(resp.Stdout) == 0 {
+		return resp.ExitCode
 	}
+	if file, ok := stdout.(*os.File); ok {
+		deadline := hook.ResponseDeadline(ctx)
+		if err := file.SetWriteDeadline(deadline); err != nil {
+			// Some inherited Windows handles do not support I/O deadlines.
+			// Let the CLI exit on time even if the host stops reading its pipe.
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				defer func() { _ = recover() }()
+				_, _ = file.Write(resp.Stdout)
+			}()
+			timer := time.NewTimer(time.Until(deadline))
+			defer timer.Stop()
+			select {
+			case <-done:
+			case <-timer.C:
+			}
+			return resp.ExitCode
+		}
+		defer file.SetWriteDeadline(time.Time{})
+	}
+	_, _ = stdout.Write(resp.Stdout)
 	return resp.ExitCode
 }
 

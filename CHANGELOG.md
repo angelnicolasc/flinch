@@ -4,6 +4,10 @@ All notable changes to Flinch are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Fixed
+
+- A failure inside a hook no longer reaches the host as an error. A panic used to exit with status 2, which Claude Code and Codex treat as a request to block the prompt or keep the agent working. The hook now answers with the host's allow response and exit code 0, sends its answer at most once, and records the last contained failure for `flinch doctor`.
+
 ## [0.1.0] - 2026-11-25
 
 First public release. Claude Code, Codex and Antigravity support is in Preview.

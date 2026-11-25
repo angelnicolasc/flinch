@@ -44,9 +44,13 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	}
 	rep := struct {
 		doctor.Report
-		Hosts        []hostReport `json:"hosts"`
-		Repositories []string     `json:"previously_active,omitempty"`
+		Hosts            []hostReport   `json:"hosts"`
+		LastHookIncident *hook.Incident `json:"last_hook_incident,omitempty"`
+		Repositories     []string       `json:"previously_active,omitempty"`
 	}{Report: doctor.Report{Schema: 1}}
+	if incident, ok := hook.LastIncident(); ok {
+		rep.LastHookIncident = &incident
+	}
 	for _, name := range []string{"claude", "codex", "antigravity"} {
 		installed, detail := usersetup.Status(name)
 		trust := workspacetrust.Evaluate(ctx, name, cwd, nil)
@@ -83,6 +87,10 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) int
 			state = "active"
 		}
 		fmt.Fprintf(stdout, "%s: %s | %s (%s)\n", host.Name, host.Installation, state, host.Reason)
+	}
+	if inc := rep.LastHookIncident; inc != nil {
+		fmt.Fprintf(stdout, "Last contained hook failure: %s, %s %s during %s (flinch %s). The turn continued without Flinch.\n",
+			inc.Time.Format(time.RFC3339), inc.Host, inc.Event, inc.Stage, inc.Version)
 	}
 	if *all {
 		fmt.Fprintln(stdout, "Previously active checkouts:")
