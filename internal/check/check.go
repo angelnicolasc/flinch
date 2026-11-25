@@ -42,8 +42,9 @@ type FindingWithReflex struct {
 
 // SkippedControl explains why a reflex was not evaluated in this run.
 type SkippedControl struct {
-	ReflexID string `json:"check_id"`
-	Reason   string `json:"reason"`
+	ReflexID              string `json:"check_id"`
+	Reason                string `json:"reason"`
+	CommandApprovalDigest string `json:"-"`
 }
 
 // Result summarizes the outcome of `flinch check --turn` or `flinch check --ci`.
@@ -402,7 +403,11 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 		case reflex.RungLint, reflex.RungStructure, reflex.RungGuard:
 			currRun, runErr := runner.RunArtifact(tctx, repoRoot, r.Artifact, targetArgForTool(r.Artifact.Tool, matchedFiles), remaining)
 			if runErr != nil {
-				res.SkippedControls = append(res.SkippedControls, SkippedControl{ReflexID: r.ID, Reason: fmt.Sprintf("tool unavailable or failed to launch: %v", runErr)})
+				reason := fmt.Sprintf("tool unavailable or failed to launch: %v", runErr)
+				if errors.Is(runErr, runner.ErrCommandApproval) {
+					reason = runner.CommandPermissionNotice
+				}
+				res.SkippedControls = append(res.SkippedControls, SkippedControl{ReflexID: r.ID, Reason: reason, CommandApprovalDigest: runner.CommandApprovalDigest(runErr)})
 				continue
 			}
 			if currRun.TimedOut {
@@ -437,9 +442,14 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 				}
 				baseRun, baseErr := runner.RunArtifact(tctx, wt.Path, r.Artifact, targetArgForTool(r.Artifact.Tool, baseTargets), baseRem)
 				if baseErr != nil || baseRun.TimedOut || (baseRun.ExitCode != 0 && len(baseRun.Findings) == 0) {
+					reason := "baseline comparison failed or timed out; failing open so pre-existing debt cannot block"
+					if errors.Is(baseErr, runner.ErrCommandApproval) {
+						reason = runner.CommandPermissionNotice
+					}
 					res.SkippedControls = append(res.SkippedControls, SkippedControl{
-						ReflexID: r.ID,
-						Reason:   "baseline comparison failed or timed out; failing open so pre-existing debt cannot block",
+						ReflexID:              r.ID,
+						Reason:                reason,
+						CommandApprovalDigest: runner.CommandApprovalDigest(baseErr),
 					})
 					continue
 				}
@@ -655,6 +665,9 @@ func RunCI(ctx context.Context, repoRoot string, cfg config.Config, opts CIOptio
 					if baseRun, baseErr := runner.RunArtifact(ctx, baseWT.Path, r.Artifact, nil, timeout); baseErr == nil {
 						baseFiltered := filterFindings(r, baseRun.Findings)
 						effective = finding.NewFindings(baseFiltered, currFiltered, renameMap)
+					} else if errors.Is(baseErr, runner.ErrCommandApproval) {
+						res.SkippedControls = append(res.SkippedControls, SkippedControl{ReflexID: r.ID, Reason: runner.CommandPermissionNotice})
+						continue
 					}
 				}
 			}

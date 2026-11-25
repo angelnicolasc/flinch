@@ -28,15 +28,12 @@ func TestRegressionInitMinimalConfigAndCloneTrust(t *testing.T) {
 	if code := Run(ctx, []string{"init", "--repo", repo}, &out, &errs); code != 0 {
 		t.Fatal(errs.String())
 	}
-	if !strings.Contains(strings.ToLower(out.String()), "command") {
-		t.Error("first init should explain command trust")
-	}
 	cfgPath := filepath.Join(repo, ".flinch", "flinch.toml")
 	if _, err := os.Stat(cfgPath); !os.IsNotExist(err) {
 		t.Error("default init wrote repository configuration")
 	}
-	if result, err := runner.RunArtifact(ctx, repo, artifact, nil, time.Second); err != nil || result.ExitCode != 0 {
-		t.Fatalf("enabled command: %v, %+v", err, result)
+	if _, err := runner.RunArtifact(ctx, repo, artifact, nil, time.Second); err == nil {
+		t.Fatal("init granted permission for a repository command")
 	}
 	other := t.TempDir()
 	if _, _, err := gitutil.Run(ctx, other, nil, "init"); err != nil {
@@ -64,7 +61,7 @@ func TestRegressionCustomVetAnalyzerNeedsCloneEnrollment(t *testing.T) {
 		t.Fatal(err)
 	}
 	art := reflex.Artifact{Tool: "go-vet", Command: "go vet -vettool=./team-analyzer"}
-	if _, err := runner.RunArtifact(ctx, repo, art, nil, time.Second); err == nil || !strings.Contains(err.Error(), "enrollment") {
+	if _, err := runner.RunArtifact(ctx, repo, art, nil, time.Second); err == nil || !strings.Contains(err.Error(), "allow-commands") {
 		t.Fatalf("repository analyzer was admitted before enrollment: %v", err)
 	}
 }

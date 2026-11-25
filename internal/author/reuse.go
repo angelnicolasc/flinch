@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -42,6 +43,7 @@ const (
 
 // ReuseOutcome summarizes the deterministic reuse-first check over a turn's fix diff.
 type ReuseOutcome struct {
+	CommandApprovalDigest  string                    `json:"-"`
 	Status                 ReuseStatus               `json:"status"`
 	Reflex                 *reflex.Reflex            `json:"reflex,omitempty"`
 	Report                 *prove.VerificationReport `json:"report,omitempty"`
@@ -775,6 +777,9 @@ func reuseConfiguredLint(ctx context.Context, repoRoot string, cfg config.Config
 			Command: lc.Command,
 		}
 		bRun, bErr := runner.RunArtifact(ctx, brokenWT.Path, art, target.files, timeout/2)
+		if errors.Is(bErr, runner.ErrCommandApproval) {
+			return ReuseOutcome{Status: ReuseInconclusive, Reason: runner.CommandPermissionNotice, CommandApprovalDigest: runner.CommandApprovalDigest(bErr)}, true
+		}
 		if bErr != nil || bRun.TimedOut || (bRun.ExitCode != 0 && len(bRun.Findings) == 0) {
 			return ReuseOutcome{Status: ReuseInconclusive, Reason: "configured lint could not complete on the broken tree"}, true
 		}
@@ -782,6 +787,9 @@ func reuseConfiguredLint(ctx context.Context, repoRoot string, cfg config.Config
 			continue
 		}
 		fRun, fErr := runner.RunArtifact(ctx, fixedWT.Path, art, target.files, timeout/2)
+		if errors.Is(fErr, runner.ErrCommandApproval) {
+			return ReuseOutcome{Status: ReuseInconclusive, Reason: runner.CommandPermissionNotice, CommandApprovalDigest: runner.CommandApprovalDigest(fErr)}, true
+		}
 		if fErr != nil || fRun.TimedOut || (fRun.ExitCode != 0 && len(fRun.Findings) == 0) {
 			return ReuseOutcome{Status: ReuseInconclusive, Reason: "configured lint could not complete on the fixed tree"}, true
 		}

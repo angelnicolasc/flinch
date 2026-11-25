@@ -128,18 +128,18 @@ func TestCommandArtifactUsesFilteredEnvironment(t *testing.T) {
 	if _, _, err := gitutil.Run(context.Background(), dir, nil, "init"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := EnableCommands(context.Background(), dir); err != nil {
+	path, script, command := "environment.cmd", "@echo off\r\necho %FLINCH_TEST_SECRET_KEY%\r\n", `.\environment.cmd`
+	if os.PathSeparator == '/' {
+		path, script, command = "environment.sh", "echo \"$FLINCH_TEST_SECRET_KEY\"\n", "sh ./environment.sh"
+	}
+	if err := os.WriteFile(filepath.Join(dir, path), []byte(script), 0600); err != nil {
 		t.Fatal(err)
 	}
-	// Cross-platform printenv using `go env`? Even simpler: print the specific var via shell.
-	cmd := "echo %FLINCH_TEST_SECRET_KEY%"
-	if os.PathSeparator == '/' {
-		cmd = "echo $FLINCH_TEST_SECRET_KEY"
+	art := reflex.Artifact{Tool: "command", Path: path, Command: command}
+	if _, err := AllowCandidateCommand(context.Background(), dir, art, nil); err != nil {
+		t.Fatal(err)
 	}
-	res, err := RunArtifact(context.Background(), dir, reflex.Artifact{
-		Tool:    "command",
-		Command: cmd,
-	}, nil, 10*time.Second)
+	res, err := RunArtifact(context.Background(), dir, art, nil, 10*time.Second)
 	if err != nil {
 		t.Fatalf("RunArtifact failed: %v", err)
 	}

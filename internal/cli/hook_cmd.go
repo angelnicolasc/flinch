@@ -17,6 +17,7 @@ import (
 	"github.com/angelnicolasc/flinch/internal/gitutil"
 	"github.com/angelnicolasc/flinch/internal/hook"
 	"github.com/angelnicolasc/flinch/internal/pause"
+	"github.com/angelnicolasc/flinch/internal/usersetup"
 )
 
 func runHook(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -25,6 +26,7 @@ func runHook(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(io.Discard) // Hooks fail open silently (P7).
 	hostStr := fs.String("host", "", "host adapter: claude | codex | antigravity")
 	eventStr := fs.String("event", "", "hook event name")
+	userHook := fs.Bool("user", false, "delivery from the user hook installed by setup")
 	repoDir := fs.String("repo", "", "optional repository directory override")
 	if err := fs.Parse(args); err != nil {
 		return 0
@@ -43,6 +45,10 @@ func runHook(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		data, err := io.ReadAll(r)
 		if err != nil {
 			data = nil
+		}
+		if !*userHook && usersetup.UserHookRegistered(string(host), *eventStr) {
+			result <- hook.AllowResponse(host)
+			return
 		}
 		result <- hook.Handle(ctx, host, *eventStr, data, *repoDir)
 	}(os.Stdin)

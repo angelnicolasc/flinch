@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -13,7 +14,10 @@ import (
 	"github.com/angelnicolasc/flinch/internal/config"
 	"github.com/angelnicolasc/flinch/internal/gitutil"
 	"github.com/angelnicolasc/flinch/internal/pause"
+	"github.com/angelnicolasc/flinch/internal/runner"
 	"github.com/angelnicolasc/flinch/internal/stats"
+	"github.com/angelnicolasc/flinch/internal/usersetup"
+	"github.com/angelnicolasc/flinch/internal/workspacetrust"
 )
 
 // Host identifies a supported coding-agent host adapter (D8, P9).
@@ -72,20 +76,6 @@ func (p Payload) promptText() string {
 		return p.LastUserInput
 	}
 	return p.Prompt
-}
-
-func (p Payload) workDir(fallback string) string {
-	if fallback != "" {
-		return fallback
-	}
-	if p.CWD != "" {
-		return p.CWD
-	}
-	if len(p.WorkspacePaths) > 0 && p.WorkspacePaths[0] != "" {
-		return p.WorkspacePaths[0]
-	}
-	cwd, _ := os.Getwd()
-	return cwd
 }
 
 func (p Payload) eventName(explicit string) string {
@@ -154,7 +144,7 @@ func ResponseDeadline(ctx context.Context) time.Time {
 
 // Handle executes one host hook event against the shared Flinch engine (D1-D3, D5-D8, P7, P9).
 // Every error path fails open (ExitCode 0) so Flinch never wedges a host session.
-func Handle(ctx context.Context, host Host, explicitEvent string, stdinBytes []byte, explicitRepo string) Response {
+func Handle(ctx context.Context, host Host, explicitEvent string, stdinBytes []byte, explicitRepo string) (response Response) {
 	allowResp := AllowResponse(host)
 	started := time.Now()
 
@@ -178,20 +168,30 @@ func Handle(ctx context.Context, host Host, explicitEvent string, stdinBytes []b
 		return allowResp
 	}
 
-	workDir := payload.workDir(explicitRepo)
-	repoRoot, err := gitutil.RepoRoot(ctx, workDir)
-	if err != nil {
-		// Outside a Git repository -> fail open.
+	status := workspacetrust.Evaluate(ctx, string(host), payload.CWD, payload.WorkspacePaths)
+	if !status.Active || !usersetup.Consented(string(host), status.Root) {
 		return allowResp
 	}
-	stateDir, err := gitutil.FlinchStateDir(ctx, repoRoot)
-	if err != nil {
+	if explicitRepo != "" {
+		root, err := gitutil.RepoRoot(ctx, explicitRepo)
+		if err != nil || root != status.Root {
+			return allowResp
+		}
+	}
+	repoRoot := status.Root
+	stateDir := filepath.Join(status.CommonDir, "flinch")
+	if ctx.Err() != nil {
 		return allowResp
 	}
-
-	// Respect local clone/worktree pause (D7).
-	if _, paused, pErr := pause.Check(stateDir, time.Now().UTC()); pErr == nil && paused {
+	if err := os.MkdirAll(stateDir, 0700); err != nil {
 		return allowResp
+	}
+	if os.Getenv("FLINCH_RECORD") == "1" {
+		defer func() {
+			if ctx.Err() == nil {
+				recordDelivery(stateDir, host, event, payload, stdinBytes, response, started, status.ClaudeProjectSameCheckout)
+			}
+		}()
 	}
 
 	cfg, _, cfgErr := config.LoadOrDefault(repoRoot)
@@ -277,11 +277,19 @@ func handleTurnStart(
 	if exists && !cp.Closed {
 		closeInterruptedTurn(stateDir, sessionID, repoRoot, "")
 	}
-	_, _ = check.CaptureCheckpointWithPolicy(
+	_, err = check.CaptureCheckpointWithPolicy(
 		ctx, repoRoot, sessionID, repoRoot,
 		payload.promptText(), promptID, true,
 		cfg.Policy.StorePromptText, cfg.Policy.RetentionDays, payload.TurnID,
 	)
+	if err == nil {
+		rememberActivation(repoRoot)
+		if host == HostClaude || host == HostCodex {
+			if firstNotice(filepath.Join(stateDir, "activation-notice")) {
+				return passiveNotice("flinch: active in this repo · flinch pause to turn it off")
+			}
+		}
+	}
 	return allowResp
 }
 
@@ -292,8 +300,16 @@ func handleStop(
 	cfg config.Config,
 	sessionID string,
 	payload Payload,
-) Response {
+) (response Response) {
 	allowResp := AllowResponse(host)
+	var approvalDigests []string
+	if host == HostClaude || host == HostCodex {
+		defer func() {
+			if len(approvalDigests) > 0 && ctx.Err() == nil {
+				response = addCommandNotice(stateDir, approvalDigests, response)
+			}
+		}()
+	}
 
 	if host == HostAntigravity {
 		if payload.TerminationReason != "model_stop" || payload.ErrorText != "" {
@@ -353,6 +369,9 @@ func handleStop(
 	st := stats.NewStore(stateDir)
 	_ = st.Record(stats.Event{Kind: stats.EventTurnChecked, Surface: string(host), DurationMS: turnRes.DurationMS})
 	for _, sk := range turnRes.SkippedControls {
+		if sk.CommandApprovalDigest != "" {
+			approvalDigests = append(approvalDigests, sk.CommandApprovalDigest)
+		}
 		_ = st.Record(stats.Event{Kind: stats.EventCheckSkipped, ReflexID: sk.ReflexID, Surface: string(host), Reason: sk.Reason})
 	}
 	// Reload checkpoint (RunTurn may have updated TestBudgetUsedMS / TotalContinuations).
@@ -428,6 +447,9 @@ func handleStop(
 		proofCtx, cancelProof := context.WithTimeout(ctx, remaining)
 		outcome, _ := author.ReuseFirst(proofCtx, repoRoot, cfg, cp.SnapshotSHA, currEndSnap, remaining, string(host))
 		cancelProof()
+		if outcome.CommandApprovalDigest != "" {
+			approvalDigests = append(approvalDigests, outcome.CommandApprovalDigest)
+		}
 		switch outcome.Status {
 		case author.ReuseProven:
 			_ = author.RecordAuthoringEvent(stateDir, author.AuthoringEvent{
@@ -481,6 +503,9 @@ func handleStop(
 	// 4. Reuse-first (D1): inspect the fix diff for a protection the agent already wrote!
 	authorStart := time.Now().UTC()
 	outcome, _ := author.ReuseFirst(ctx, repoRoot, cfg, nom.BrokenRef, nom.FixedRef, author.AuthoringBudgetCap, string(host))
+	if outcome.CommandApprovalDigest != "" {
+		approvalDigests = append(approvalDigests, outcome.CommandApprovalDigest)
+	}
 	switch outcome.Status {
 	case author.ReuseProven:
 		_ = author.RecordAuthoringEvent(stateDir, author.AuthoringEvent{
@@ -572,6 +597,42 @@ func handleStop(
 	}
 	prompt := buildAuthoringContinuationPrompt(guide, nom)
 	return requestContinuation(prompt)
+}
+
+func firstNotice(path string) bool {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return false
+	}
+	_ = f.Close()
+	return true
+}
+
+func addCommandNotice(stateDir string, digests []string, response Response) Response {
+	dir := filepath.Join(stateDir, "command-notices")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return response
+	}
+	fields := map[string]string{}
+	if len(response.Stdout) > 0 && json.Unmarshal(response.Stdout, &fields) != nil {
+		return response
+	}
+	newContent := false
+	for _, digest := range digests {
+		if firstNotice(filepath.Join(dir, digest)) {
+			newContent = true
+		}
+	}
+	if newContent {
+		if previous := fields["systemMessage"]; previous != "" {
+			fields["systemMessage"] = previous + "\n" + runner.CommandPermissionNotice
+		} else {
+			fields["systemMessage"] = runner.CommandPermissionNotice
+		}
+		b, _ := json.Marshal(fields)
+		response.Stdout = append(b, '\n')
+	}
+	return response
 }
 
 func buildAuthoringContinuationPrompt(guideFile string, nom author.Nomination) string {

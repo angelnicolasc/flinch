@@ -160,11 +160,25 @@ func codexCandidateNames() []string {
 	return names
 }
 
-func shellCommand(ctx context.Context, command string) *exec.Cmd {
-	if runtime.GOOS == "windows" {
-		return exec.CommandContext(ctx, "cmd", "/C", command)
+func commandProcess(ctx context.Context, command string) (*exec.Cmd, error) {
+	words, err := literalCommandWords(command)
+	if err != nil {
+		return nil, err
 	}
-	return exec.CommandContext(ctx, "sh", "-c", command)
+	// Invoke reviewed external programs directly, preserving argument boundaries and
+	// avoiding the command shell's separate executable search in the repository.
+	if runtime.GOOS == "windows" {
+		ext := strings.ToLower(filepath.Ext(words[0]))
+		if strings.EqualFold(words[0], "echo") || strings.EqualFold(words[0], "exit") || ext == ".bat" || ext == ".cmd" {
+			return exec.CommandContext(ctx, "cmd", "/d", "/c", command), nil
+		}
+	} else {
+		switch words[0] {
+		case "echo", "exit", "printf", "true", "false", "pwd":
+			return exec.CommandContext(ctx, "sh", "-c", command), nil
+		}
+	}
+	return exec.CommandContext(ctx, words[0], words[1:]...), nil
 }
 
 func relTargetsOrAll(rootDir string, files []string) []string {

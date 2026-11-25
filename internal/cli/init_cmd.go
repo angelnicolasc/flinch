@@ -13,7 +13,6 @@ import (
 	"github.com/angelnicolasc/flinch/internal/config"
 	"github.com/angelnicolasc/flinch/internal/doctor"
 	"github.com/angelnicolasc/flinch/internal/hook"
-	"github.com/angelnicolasc/flinch/internal/runner"
 )
 
 func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -24,9 +23,18 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	owner := fs.String("owner", "", "default owner written to policy.owner")
 	mode := fs.String("mode", string(config.ModeLocalAuto), "preparation mode: local_auto | observe_only")
 	hostsCSV := fs.String("hooks", "", "comma-separated host hooks to install idempotently: claude,codex,antigravity")
+	shared := fs.Bool("shared", false, "install the selected host hooks in project files for the team")
 	flinchBin := fs.String("bin", "flinch", "flinch command path written into installed hooks")
 	asJSON := fs.Bool("json", false, "output JSON")
 	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if strings.TrimSpace(*hostsCSV) != "" && !*shared {
+		fmt.Fprintln(stderr, "flinch init: use --shared --hooks <host> to install project hooks, or flinch setup for user hooks")
+		return 2
+	}
+	if *shared && strings.TrimSpace(*hostsCSV) == "" {
+		fmt.Fprintln(stderr, "flinch init: --shared requires --hooks <host>")
 		return 2
 	}
 
@@ -91,14 +99,6 @@ func runInit(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	enabled, err := runner.EnableCommands(ctx, root)
-	if err != nil {
-		fmt.Fprintf(stderr, "flinch init: %v\n", err)
-		return 2
-	}
-	if enabled {
-		notes = append(notes, "Enabled repository command and script checks for this clone.")
-	}
 	rep, err := doctor.Run(ctx, root, false)
 	if err != nil {
 		fmt.Fprintf(stderr, "flinch init: doctor check failed: %v\n", err)

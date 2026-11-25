@@ -19,6 +19,7 @@ import (
 	"github.com/angelnicolasc/flinch/internal/prove"
 	"github.com/angelnicolasc/flinch/internal/reflex"
 	"github.com/angelnicolasc/flinch/internal/runner"
+	"github.com/angelnicolasc/flinch/internal/testutil"
 )
 
 // TestStructureRungInternalBoundaryProveAndZeroFlinchClone verifies Acceptance §2 (Structure):
@@ -102,9 +103,6 @@ func TestGuardRungRecognizableFailureMatchesNativeCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := runner.EnableCommands(ctx, repo); err != nil {
-		t.Fatal(err)
-	}
 	guardSrc := `package main
 
 import (
@@ -131,7 +129,7 @@ func main() {
 	writeRepoFile(t, repo, "go.mod", "module example.com/guarddemo\n\ngo 1.26\n\ntoolchain go1.26.1\n")
 	fixedSHA := gitCommit(t, repo, "fix go.mod toolchain pin")
 
-	rep, err := prove.Verify(ctx, repo, prove.CandidateSpec{
+	spec := prove.CandidateSpec{
 		ID:           "pin-go-toolchain",
 		Scope:        "go.mod",
 		AllowedCases: []prove.AllowedCase{{Name: "other-module-with-pin", TargetPath: "go.mod", Content: "module example.com/neighbor\n\ngo 1.26\n\ntoolchain go1.26.1\n"}},
@@ -146,7 +144,11 @@ func main() {
 		},
 		BrokenRef: brokenSHA,
 		FixedRef:  fixedSHA,
-	}, prove.Options{})
+	}
+	if _, err := runner.AllowCandidateCommand(ctx, repo, spec.Artifact, nil); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := prove.Verify(ctx, repo, spec, prove.Options{})
 	if err != nil {
 		t.Fatalf("prove guard failed: %v", err)
 	}
@@ -226,6 +228,7 @@ func TestBudgetSlowTestDeferredAtTurnEndAndRunByNativeCI(t *testing.T) {
 func TestSharedInstructionsLineAndSkipOutcomes(t *testing.T) {
 	ctx := context.Background()
 	repo := t.TempDir()
+	testutil.HookProfile(t, repo)
 	if _, _, err := gitutil.Run(ctx, repo, nil, "init"); err != nil {
 		t.Fatal(err)
 	}

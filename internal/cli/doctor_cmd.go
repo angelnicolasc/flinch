@@ -5,12 +5,17 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"path/filepath"
 	"time"
 
 	"github.com/angelnicolasc/flinch/internal/check"
 	"github.com/angelnicolasc/flinch/internal/config"
 	"github.com/angelnicolasc/flinch/internal/doctor"
 	"github.com/angelnicolasc/flinch/internal/gitutil"
+	"github.com/angelnicolasc/flinch/internal/hook"
+	"github.com/angelnicolasc/flinch/internal/runner"
+	"github.com/angelnicolasc/flinch/internal/usersetup"
+	"github.com/angelnicolasc/flinch/internal/workspacetrust"
 )
 
 func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -18,30 +23,84 @@ func runDoctor(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	fs.SetOutput(stderr)
 	repoDir := fs.String("repo", "", "repository directory")
 	prune := fs.Bool("prune", false, "prune stale Flinch worktrees")
+	all := fs.Bool("all", false, "list checkouts where a hook previously activated")
 	asJSON := fs.Bool("json", false, "output JSON")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 
-	root, err := resolveRepoRoot(ctx, *repoDir)
+	cwd, err := filepath.Abs(*repoDir)
 	if err != nil {
-		fmt.Fprintf(stderr, "flinch doctor: %v\n", err)
+		fmt.Fprintln(stderr, err)
 		return 2
 	}
-	rep, err := doctor.Run(ctx, root, *prune)
-	if err != nil {
-		fmt.Fprintf(stderr, "flinch doctor: %v\n", err)
+	root, rootErr := resolveRepoRoot(ctx, cwd)
+	type hostReport struct {
+		Name         string `json:"host"`
+		Installed    bool   `json:"installed"`
+		Active       bool   `json:"active"`
+		Installation string `json:"installation"`
+		Reason       string `json:"reason"`
+	}
+	rep := struct {
+		doctor.Report
+		Hosts        []hostReport `json:"hosts"`
+		Repositories []string     `json:"previously_active,omitempty"`
+	}{Report: doctor.Report{Schema: 1}}
+	for _, name := range []string{"claude", "codex", "antigravity"} {
+		installed, detail := usersetup.Status(name)
+		trust := workspacetrust.Evaluate(ctx, name, cwd, nil)
+		reason := trust.Reason
+		active := trust.Active && installed && usersetup.Consented(name, trust.Root)
+		if trust.Active && !active {
+			reason = "user hooks need setup or repair"
+		}
+		rep.Hosts = append(rep.Hosts, hostReport{name, installed, active, detail, reason})
+	}
+	if *all {
+		rep.Repositories, err = hook.ActivationHistory()
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+	}
+	if rootErr == nil {
+		rep.Report, err = doctor.Run(ctx, root, *prune)
+		if err != nil {
+			fmt.Fprintf(stderr, "flinch doctor: %v\n", err)
+			return 2
+		}
+	} else if *prune {
+		fmt.Fprintln(stderr, "flinch doctor --prune requires a Git checkout")
 		return 2
 	}
-
 	if *asJSON {
 		return writeJSON(stdout, rep)
+	}
+	for _, host := range rep.Hosts {
+		state := "inactive"
+		if host.Active {
+			state = "active"
+		}
+		fmt.Fprintf(stdout, "%s: %s | %s (%s)\n", host.Name, host.Installation, state, host.Reason)
+	}
+	if *all {
+		fmt.Fprintln(stdout, "Previously active checkouts:")
+		for _, path := range rep.Repositories {
+			fmt.Fprintf(stdout, "  %q\n", path)
+		}
+	}
+	if rootErr != nil {
+		return 0
 	}
 
 	fmt.Fprintf(stdout, "Repository: %s (head=%s, config=%v, mode=%s)\n",
 		rep.RepoRoot, shortSHA(rep.HeadSHA), rep.ConfigPresent, rep.PolicyMode)
 	fmt.Fprintf(stdout, "Protections: %d deterministic, %d probabilistic context guides\n",
 		rep.DeterministicReflexes, rep.ProbabilisticGuides)
+	if rep.CommandApprovalRequired {
+		fmt.Fprintln(stdout, runner.CommandPermissionNotice)
+	}
 	if rep.UnrecognizedAssertions > 0 {
 		fmt.Fprintf(stdout, "Local test candidates with no recognized assertion (no_recognized_assertion): %d\n", rep.UnrecognizedAssertions)
 	}

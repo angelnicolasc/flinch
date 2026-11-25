@@ -13,6 +13,7 @@ import (
 	"github.com/angelnicolasc/flinch/internal/gitutil"
 	"github.com/angelnicolasc/flinch/internal/hook"
 	"github.com/angelnicolasc/flinch/internal/reflex"
+	"github.com/angelnicolasc/flinch/internal/testutil"
 )
 
 func TestProductOnlyRepeatInTurnAndNativeClone(t *testing.T) {
@@ -39,6 +40,7 @@ func runProductOnlyRepeat(t *testing.T, scenario nativeCheckScenario, tools ...s
 		t.Run(tool, func(t *testing.T) {
 			ctx := context.Background()
 			repo := t.TempDir()
+			testutil.HookProfile(t, repo)
 			if _, _, err := gitutil.Run(ctx, repo, nil, "init"); err != nil {
 				t.Fatal(err)
 			}

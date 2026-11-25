@@ -37,7 +37,7 @@ func RunArtifact(ctx context.Context, rootDir string, art reflex.Artifact, targe
 	case "go-vet":
 		// A custom analyzer is a repository-selected executable.
 		if strings.Contains(art.Command, "-vettool=") {
-			if err := checkCommandTrust(ctx, rootDir); err != nil {
+			if err := checkCommandTrust(tctx, rootDir, art); err != nil {
 				return res, err
 			}
 		}
@@ -53,7 +53,7 @@ func RunArtifact(ctx context.Context, rootDir string, art reflex.Artifact, targe
 	case "ast-grep":
 		res, err = runAstGrep(tctx, rootDir, art, targetFiles)
 	case "command", "script":
-		if err := checkCommandTrust(ctx, rootDir); err != nil {
+		if err := checkCommandTrust(tctx, rootDir, art); err != nil {
 			return res, err
 		}
 		res, err = runCommandArtifact(tctx, rootDir, art, targetFiles)
@@ -73,12 +73,14 @@ func RunArtifact(ctx context.Context, rootDir string, art reflex.Artifact, targe
 
 func runGoVet(ctx context.Context, rootDir string, art reflex.Artifact, targetFiles []string) (LintRunResult, error) {
 	args := []string{"vet", "-json"}
-	if art.Path != "" && strings.HasSuffix(art.Path, ".exe") || strings.Contains(art.Command, "-vettool=") {
-		if strings.Contains(art.Command, "-vettool=") {
-			for _, tok := range strings.Fields(art.Command) {
-				if strings.HasPrefix(tok, "-vettool=") {
-					args = append(args, tok)
-				}
+	if strings.Contains(art.Command, "-vettool=") {
+		words, err := literalCommandWords(art.Command)
+		if err != nil {
+			return LintRunResult{}, err
+		}
+		for _, arg := range words {
+			if strings.HasPrefix(arg, "-vettool=") {
+				args = append(args, arg)
 			}
 		}
 	}
@@ -543,7 +545,10 @@ func runCommandArtifact(ctx context.Context, rootDir string, art reflex.Artifact
 		return LintRunResult{}, fmt.Errorf("command artifact requires artifact.command")
 	}
 	start := time.Now()
-	cmd := shellCommand(ctx, art.Command)
+	cmd, err := commandProcess(ctx, art.Command)
+	if err != nil {
+		return LintRunResult{}, err
+	}
 	cmd.Dir = rootDir
 	var extra []string
 	if len(targetFiles) > 0 {
@@ -552,7 +557,7 @@ func runCommandArtifact(ctx context.Context, rootDir string, art reflex.Artifact
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := runCandidate(cmd, rootDir, extra...)
+	err = runCandidate(cmd, rootDir, extra...)
 
 	res := LintRunResult{
 		Tool:       art.Tool,

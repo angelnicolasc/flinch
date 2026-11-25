@@ -10,6 +10,7 @@ import (
 
 	"github.com/angelnicolasc/flinch/internal/cli"
 	"github.com/angelnicolasc/flinch/internal/hook"
+	"github.com/angelnicolasc/flinch/internal/testutil"
 )
 
 func TestMissingAssertionReachesDoctorFromBothStopPaths(t *testing.T) {
@@ -19,6 +20,7 @@ func TestMissingAssertionReachesDoctorFromBothStopPaths(t *testing.T) {
 	for _, path := range []string{"existing", "authored"} {
 		t.Run(path, func(t *testing.T) {
 			repo := t.TempDir()
+			testutil.HookProfile(t, repo)
 			fixtureGit(t, repo, "init")
 			const baseTests = "from value import value\nimport pytest\n\ndef test_neighbor():\n    assert value >= 0\n"
 			fixtureWrite(t, repo, "value.py", "value = 0\n")

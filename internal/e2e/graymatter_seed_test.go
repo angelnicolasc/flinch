@@ -358,9 +358,6 @@ func TestGrayMatterSeed27And55EndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := runner.EnableCommands(ctx, originRepo); err != nil {
-		t.Fatal(err)
-	}
 	writeRepoFile(t, originRepo, "go.mod", "module example.com/graymatter-seed\n\ngo 1.26\n")
 	writeRepoFile(t, originRepo, "pkg/provider/client.go", brokenPR27Client)
 	brokenPR27SHA := gitCommit(t, originRepo, "base before PR #27 (unbounded response read)")
@@ -369,7 +366,7 @@ func TestGrayMatterSeed27And55EndToEnd(t *testing.T) {
 	fixedPR27SHA := gitCommit(t, originRepo, "fix: bound provider HTTP response body reads (PR #27)")
 
 	// Step A: Prove rejects the overbroad naive rule because it flags the §11 2-byte allowed case.
-	naiveReport, err := prove.Verify(ctx, originRepo, prove.CandidateSpec{
+	naiveCandidate := prove.CandidateSpec{
 		ID:         "unbounded-response-body-read",
 		Version:    1,
 		Rung:       reflex.RungLint,
@@ -395,7 +392,11 @@ func TestGrayMatterSeed27And55EndToEnd(t *testing.T) {
 		},
 		BrokenRef: brokenPR27SHA,
 		FixedRef:  fixedPR27SHA,
-	}, prove.Options{})
+	}
+	if _, err := runner.AllowCandidateCommand(ctx, originRepo, naiveCandidate.Artifact, naiveCandidate.OverlayFiles); err != nil {
+		t.Fatal(err)
+	}
+	naiveReport, err := prove.Verify(ctx, originRepo, naiveCandidate, prove.Options{})
 	if err != nil {
 		t.Fatalf("prove naive failed: %v", err)
 	}
@@ -405,7 +406,7 @@ func TestGrayMatterSeed27And55EndToEnd(t *testing.T) {
 	}
 
 	// Step B: Prove verifies the refined rule against #27 broken, #27 fixed, and the §11 2-byte allowed case.
-	refinedReport, err := prove.Verify(ctx, originRepo, prove.CandidateSpec{
+	refinedCandidate := prove.CandidateSpec{
 		ID:         "unbounded-response-body-read",
 		Version:    1,
 		Rung:       reflex.RungLint,
@@ -432,7 +433,11 @@ func TestGrayMatterSeed27And55EndToEnd(t *testing.T) {
 		},
 		BrokenRef: brokenPR27SHA,
 		FixedRef:  fixedPR27SHA,
-	}, prove.Options{})
+	}
+	if _, err := runner.AllowCandidateCommand(ctx, originRepo, refinedCandidate.Artifact, refinedCandidate.OverlayFiles); err != nil {
+		t.Fatal(err)
+	}
+	refinedReport, err := prove.Verify(ctx, originRepo, refinedCandidate, prove.Options{})
 	if err != nil {
 		t.Fatalf("prove refined failed: %v", err)
 	}

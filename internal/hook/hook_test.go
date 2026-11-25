@@ -60,6 +60,7 @@ func TestRetryDelay(t *testing.T) {
 	if _, _, err := gitutil.Run(ctx, repo, env, "-c", "commit.gpgsign=false", "commit", "-m", "initial"); err != nil {
 		t.Fatal(err)
 	}
+	setupHookProfile(t, repo)
 	return repo
 }
 
@@ -81,7 +82,7 @@ func TestClaudeAndCodexTurnFlowReuseAndAuthoring(t *testing.T) {
 				"prompt":          "Implement Delay with optional override",
 			})
 			r := Handle(ctx, host, "UserPromptSubmit", start1, "")
-			if r.ExitCode != 0 || len(r.Stdout) != 0 {
+			if r.ExitCode != 0 || !strings.Contains(string(r.Stdout), "active in this repo") {
 				t.Fatalf("unexpected Turn 1 start response: %+v", r)
 			}
 

@@ -9,7 +9,54 @@ import (
 	"github.com/angelnicolasc/flinch/internal/config"
 	"github.com/angelnicolasc/flinch/internal/gitutil"
 	"github.com/angelnicolasc/flinch/internal/reflex"
+	"github.com/angelnicolasc/flinch/internal/runner"
 )
+
+func TestDoctorReportsCommandApprovalWithoutGrantingOrRunningIt(t *testing.T) {
+	ctx := context.Background()
+	repo := t.TempDir()
+	if _, _, err := gitutil.Run(ctx, repo, nil, "init"); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	if runner.CommandsNeedApproval(ctx, repo, cfg, nil) {
+		t.Fatal("reported a missing approval without a repository command")
+	}
+	cfg.Lint = []config.LintConfig{{Kind: "script", Command: "sh ./guard.sh"}}
+	if err := config.Save(repo, cfg); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(repo, "guard.sh")
+	if err := os.WriteFile(script, []byte("echo ran > unexpected-execution\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	report, err := Run(ctx, repo, false)
+	if err != nil || !report.CommandApprovalRequired {
+		t.Fatalf("diagnosed unapproved command: required=%t err=%v", report.CommandApprovalRequired, err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".git", "flinch", "command-approvals.json")); !os.IsNotExist(err) {
+		t.Fatalf("diagnosis created an approval: %v", err)
+	}
+	if _, err := runner.EnableCommands(ctx, repo); err != nil {
+		t.Fatal(err)
+	}
+	if runner.CommandsNeedApproval(ctx, repo, cfg, nil) {
+		t.Fatal("reported a reviewed, unchanged script")
+	}
+	if err := os.WriteFile(script, []byte("echo changed > unexpected-execution\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if !runner.CommandsNeedApproval(ctx, repo, cfg, nil) {
+		t.Fatal("failed to report a script changed since approval")
+	}
+	record := reflex.Reflex{Artifact: reflex.Artifact{Tool: "command", Command: "echo record"}}
+	if !runner.CommandsNeedApproval(ctx, repo, config.Default(), []reflex.Reflex{record}) {
+		t.Fatal("failed to report an unapproved command in a stored check")
+	}
+	if _, err := os.Stat(filepath.Join(repo, "unexpected-execution")); !os.IsNotExist(err) {
+		t.Fatalf("diagnosing command approval ran the script: %v", err)
+	}
+}
 
 func TestDiscoverAndDiagnoseSeparatesDeterministicAndProbabilistic(t *testing.T) {
 	repo := t.TempDir()

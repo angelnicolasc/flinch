@@ -57,21 +57,22 @@ type ReflexHealth struct {
 
 // Report is the structured diagnostic output of `flinch doctor` and `flinch init`.
 type Report struct {
-	Schema                 int                        `json:"schema"`
-	RepoRoot               string                     `json:"repo_root"`
-	ConfigPresent          bool                       `json:"config_present"`
-	PolicyMode             config.PreparationMode     `json:"policy_mode"`
-	HeadSHA                string                     `json:"head_sha,omitempty"`
-	Tools                  map[string]runner.ToolInfo `json:"tools"`
-	Workflows              []string                   `json:"workflows,omitempty"`
-	ContextFiles           []string                   `json:"context_files,omitempty"`
-	Capabilities           CapabilityMatrix           `json:"capabilities"`
-	DeterministicReflexes  int                        `json:"deterministic_checks"`
-	ProbabilisticGuides    int                        `json:"probabilistic_guides"`
-	UnrecognizedAssertions int                        `json:"no_recognized_assertion"`
-	ReflexHealth           []ReflexHealth             `json:"check_health,omitempty"`
-	PrunedOrphanWorktrees  int                        `json:"pruned_orphan_worktrees,omitempty"`
-	Cleanup                *check.CleanupReport       `json:"cleanup,omitempty"`
+	Schema                  int                        `json:"schema"`
+	RepoRoot                string                     `json:"repo_root"`
+	ConfigPresent           bool                       `json:"config_present"`
+	PolicyMode              config.PreparationMode     `json:"policy_mode"`
+	HeadSHA                 string                     `json:"head_sha,omitempty"`
+	Tools                   map[string]runner.ToolInfo `json:"tools"`
+	Workflows               []string                   `json:"workflows,omitempty"`
+	ContextFiles            []string                   `json:"context_files,omitempty"`
+	Capabilities            CapabilityMatrix           `json:"capabilities"`
+	DeterministicReflexes   int                        `json:"deterministic_checks"`
+	ProbabilisticGuides     int                        `json:"probabilistic_guides"`
+	UnrecognizedAssertions  int                        `json:"no_recognized_assertion"`
+	CommandApprovalRequired bool                       `json:"command_approval_required"`
+	ReflexHealth            []ReflexHealth             `json:"check_health,omitempty"`
+	PrunedOrphanWorktrees   int                        `json:"pruned_orphan_worktrees,omitempty"`
+	Cleanup                 *check.CleanupReport       `json:"cleanup,omitempty"`
 }
 
 // DiscoverConfig describes the same repository defaults used by hooks without a TOML file.
@@ -110,7 +111,10 @@ func Run(ctx context.Context, repoRoot string, pruneWorktrees bool) (Report, err
 		ContextFiles:  findContextFiles(repoRoot),
 	}
 
-	stateDir, _ := gitutil.FlinchStateDir(ctx, repoRoot)
+	var stateDir string
+	if common, err := gitutil.CommonDir(ctx, repoRoot); err == nil {
+		stateDir = filepath.Join(common, "flinch")
+	}
 	if pruneWorktrees {
 		if n, pruneErr := gitutil.PruneOrphanWorktrees(ctx, repoRoot); pruneErr == nil {
 			rep.PrunedOrphanWorktrees = n
@@ -131,6 +135,7 @@ func Run(ctx context.Context, repoRoot string, pruneWorktrees bool) (Report, err
 	}
 
 	reflexes, _ := reflex.LoadAll(repoRoot)
+	rep.CommandApprovalRequired = runner.CommandsNeedApproval(ctx, repoRoot, cfg, reflexes)
 	hasActiveCI := false
 	hasRequiredMergeBlock := false
 	hasActiveTurn := false

@@ -30,6 +30,12 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	case "version", "--version":
 		fmt.Fprintf(stdout, "flinch %s\n", Version)
 		return 0
+	case "setup":
+		return runSetup(ctx, rest, stdout, stderr)
+	case "enable", "disable":
+		return runClonePermission(ctx, cmd, rest, stdout, stderr)
+	case "allow-commands":
+		return runAllowCommands(ctx, rest, stdout, stderr)
 	case "init":
 		return runInit(ctx, rest, stdout, stderr)
 	case "prove":
@@ -72,7 +78,11 @@ Usage:
   flinch <command> [flags]
 
 Commands:
-  init        Enable this clone and install hooks for a host (--hooks claude|codex|antigravity)
+  setup       Preview, install or remove user hooks (--plan, --yes, --host, --remove)
+  init        Configure a team repository (optional --shared --hooks <host>)
+  enable      Grant Claude Code and Antigravity permission in this clone and its worktrees
+  disable     Revoke this clone's explicit permission for Claude Code and Antigravity
+  allow-commands  Approve the current contents of reviewed repository commands and scripts
   prove       Prove a candidate check against the original mistake, the fix and an allowed case
   check       Run the reviewed checks at the end of a turn (--turn) or in CI (--ci)
   hook        Entry point the host hooks call (--host <host> --event <event>)

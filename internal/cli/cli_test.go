@@ -188,13 +188,13 @@ func TestCLIPauseResumeSkipReportCleanupAndHooksInit(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module example.com/subcmds\n\ngo 1.26\n"), 0o644)
 
 	var out, errBuf bytes.Buffer
-	if code := Run(ctx, []string{"init", "--repo", repo, "--hooks", "claude,codex,antigravity", "--json"}, &out, &errBuf); code != 0 {
+	if code := Run(ctx, []string{"init", "--repo", repo, "--shared", "--hooks", "claude,codex,antigravity", "--json"}, &out, &errBuf); code != 0 {
 		t.Fatalf("init --hooks failed (%d): %s", code, errBuf.String())
 	}
 	// Second init --hooks must be a no-op across config + all 3 host hook files (D10).
 	out.Reset()
 	errBuf.Reset()
-	if code := Run(ctx, []string{"init", "--repo", repo, "--hooks", "claude,codex,antigravity", "--json"}, &out, &errBuf); code != 0 {
+	if code := Run(ctx, []string{"init", "--repo", repo, "--shared", "--hooks", "claude,codex,antigravity", "--json"}, &out, &errBuf); code != 0 {
 		t.Fatalf("second init --hooks failed (%d): %s", code, errBuf.String())
 	}
 	if !strings.Contains(out.String(), `"unchanged": true`) || strings.Contains(out.String(), `"changed": true`) {

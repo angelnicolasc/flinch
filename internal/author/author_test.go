@@ -206,6 +206,32 @@ func TestParseSkipFromText(t *testing.T) {
 	}
 }
 
+func TestReuseFirstReportsCommandApproval(t *testing.T) {
+	repo := t.TempDir()
+	ctx := context.Background()
+	if _, _, err := gitutil.Run(ctx, repo, nil, "init"); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(repo, "mode.txt")
+	if err := os.WriteFile(path, []byte("broken\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	broken := commitSeed(t, repo, "initial mode")
+	if err := os.WriteFile(path, []byte("fixed\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	fixed, err := gitutil.CaptureWorkingTreeSnapshot(ctx, repo, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Lint = []config.LintConfig{{Kind: "command", Command: "echo checked"}}
+	outcome, err := ReuseFirst(ctx, repo, cfg, broken, fixed, AuthoringBudgetCap)
+	if err != nil || outcome.Status != ReuseInconclusive || !strings.Contains(outcome.Reason, "flinch allow-commands") {
+		t.Fatalf("missing actionable command permission notice: %+v, %v", outcome, err)
+	}
+}
+
 func TestReuseFirstProvesConfiguredLintRuleWithInScopeNeighbor(t *testing.T) {
 	repo := t.TempDir()
 	ctx := context.Background()

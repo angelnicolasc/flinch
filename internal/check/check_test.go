@@ -12,7 +12,49 @@ import (
 	"github.com/angelnicolasc/flinch/internal/evidence"
 	"github.com/angelnicolasc/flinch/internal/gitutil"
 	"github.com/angelnicolasc/flinch/internal/reflex"
+	"github.com/angelnicolasc/flinch/internal/runner"
 )
+
+func TestTurnReportsWhenCurrentOrBaselineCommandNeedsApproval(t *testing.T) {
+	ctx := context.Background()
+	repo := t.TempDir()
+	if _, _, err := gitutil.Run(ctx, repo, nil, "init"); err != nil {
+		t.Fatal(err)
+	}
+	check := reflex.Reflex{
+		ID: "guard", Version: 1, Obligation: "Report a sample finding", Scope: "guard.txt",
+		Artifact: reflex.Artifact{Tool: "command", Path: "guard.txt", Command: "echo guard.txt:1:1: sample finding"},
+	}
+	if _, err := reflex.Save(repo, check); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(repo, "guard.txt")
+	if err := os.WriteFile(path, []byte("baseline\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	commitRepo(t, repo, "Add guard")
+	opts := TurnOptions{SessionID: "approval", WorktreeID: repo, Deadline: 30 * time.Second}
+	if _, err := CaptureCheckpoint(ctx, repo, opts.SessionID, repo, "edit guard", "p-1", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("current\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	requireNotice := func() {
+		t.Helper()
+		got, err := RunTurn(ctx, repo, config.Default(), opts)
+		if err != nil || got.Blocking || len(got.Findings) != 0 || len(got.SkippedControls) != 1 ||
+			got.SkippedControls[0].Reason != runner.CommandPermissionNotice {
+			t.Fatalf("missing advisory approval notice: %+v err=%v", got, err)
+		}
+	}
+	requireNotice()
+	if _, err := runner.EnableCommands(ctx, repo); err != nil {
+		t.Fatal(err)
+	}
+	// The current check can now report a finding, but the baseline still has unapproved bytes.
+	requireNotice()
+}
 
 func commitRepo(t *testing.T, repo, msg string) string {
 	t.Helper()

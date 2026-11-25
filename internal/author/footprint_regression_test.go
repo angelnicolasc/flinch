@@ -14,6 +14,7 @@ import (
 	"github.com/angelnicolasc/flinch/internal/author"
 	"github.com/angelnicolasc/flinch/internal/gitutil"
 	"github.com/angelnicolasc/flinch/internal/hook"
+	"github.com/angelnicolasc/flinch/internal/testutil"
 )
 
 func fixtureGit(t *testing.T, repo string, args ...string) string {
@@ -136,6 +137,7 @@ func TestAuthoringOutcomesPreserveDirtyCheckout(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := t.TempDir()
+			testutil.HookProfile(t, repo)
 			fixtureGit(t, repo, "init")
 			guide := "<!-- flinch:start -->\n<!-- flinch:end -->\n"
 			fixtureWrite(t, repo, "AGENTS.md", guide)

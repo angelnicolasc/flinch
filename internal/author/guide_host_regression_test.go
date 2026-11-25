@@ -11,6 +11,7 @@ import (
 
 	"github.com/angelnicolasc/flinch/internal/gitutil"
 	"github.com/angelnicolasc/flinch/internal/hook"
+	"github.com/angelnicolasc/flinch/internal/testutil"
 )
 
 // Exercise the public adapter entry point so a configured filename alone never
@@ -28,6 +29,7 @@ func TestClaudeCreditsOnlyAnExistingImportedGuide(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			repo := t.TempDir()
+			testutil.HookProfile(t, repo)
 			if _, _, err := gitutil.Run(ctx, repo, nil, "init"); err != nil {
 				t.Fatal(err)
 			}

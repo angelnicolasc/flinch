@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/angelnicolasc/flinch/internal/gitutil"
 	"github.com/angelnicolasc/flinch/internal/reflex"
+	"github.com/angelnicolasc/flinch/internal/runner"
 )
 
 func proofRegressionSpec(broken, fixed string) CandidateSpec {
@@ -119,13 +119,6 @@ func TestRegressionCase(t *testing.T) {
 func TestRegressionGuardRequiresNeighborAndIndependentReplays(t *testing.T) {
 	repo, broken, fixed := setupGoCalcRepo(t)
 	ctx := context.Background()
-	state, err := gitutil.FlinchStateDir(ctx, repo)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(state, "commands-enabled"), []byte("enabled\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	logPath := filepath.Join(t.TempDir(), "broken-dirs")
 	s := CandidateSpec{
 		ID: "guard-clamp", BrokenRef: broken, FixedRef: fixed, Rung: reflex.RungGuard,
@@ -140,6 +133,9 @@ func main() {
  fmt.Fprintln(f, cwd); f.Close()
  fmt.Println("clamp missing"); os.Exit(1)
 }`, logPath)},
+	}
+	if _, err := runner.AllowCandidateCommand(ctx, repo, s.Artifact, s.OverlayFiles); err != nil {
+		t.Fatal(err)
 	}
 	if r := regressionVerdict(t, repo, s); r.Verdict != VerdictInconclusive || r.Reason != ReasonMissingAllowedCase {
 		t.Fatalf("guard accepted without neighbor: %+v", r)
