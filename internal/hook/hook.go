@@ -189,7 +189,7 @@ func Handle(ctx context.Context, host Host, explicitEvent string, stdinBytes []b
 	if os.Getenv("FLINCH_RECORD") == "1" {
 		defer func() {
 			if ctx.Err() == nil {
-				recordDelivery(stateDir, host, event, payload, stdinBytes, response, started, status.ClaudeProjectSameCheckout)
+				recordDelivery(stateDir, host, event, payload, stdinBytes, response, started, status.ClaudeProjectSameClone, status.ClaudeProjectSameCheckout)
 			}
 		}()
 	}

@@ -20,7 +20,7 @@ func TestRecordingAliasesCorrelateOnlyWithinClone(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		recordDelivery(state, HostAntigravity, "Stop", p, raw, continueResponse(HostAntigravity, secret), time.Now(), false)
+		recordDelivery(state, HostAntigravity, "Stop", p, raw, continueResponse(HostAntigravity, secret), time.Now(), false, false)
 		files, err := filepath.Glob(filepath.Join(state, "recordings", "*.json"))
 		if err != nil || len(files) != 1 {
 			t.Fatalf("record files: %v, %v", files, err)

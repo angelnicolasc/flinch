@@ -52,7 +52,7 @@ func passiveNotice(text string) Response {
 	return Response{Stdout: append(b, '\n')}
 }
 
-func recordDelivery(stateDir string, host Host, event string, p Payload, raw []byte, resp Response, started time.Time, projectSameCheckout bool) {
+func recordDelivery(stateDir string, host Host, event string, p Payload, raw []byte, resp Response, started time.Time, projectSameClone, projectSameCheckout bool) {
 	key := recordingKey(stateDir)
 	if key == nil {
 		return
@@ -141,14 +141,18 @@ func recordDelivery(stateDir string, host Host, event string, p Payload, raw []b
 	}
 	record := map[string]any{"schema": 1, "host": host, "event": event, "present": present, "input": fields, "output": out, "elapsed_ms": time.Since(started).Milliseconds(), "started_utc": started.UTC()}
 	if host == HostClaude {
-		_, entrypoint := os.LookupEnv("CLAUDE_CODE_ENTRYPOINT")
+		entrypointValue, entrypoint := os.LookupEnv("CLAUDE_CODE_ENTRYPOINT")
 		_, project := os.LookupEnv("CLAUDE_PROJECT_DIR")
 		_, child := os.LookupEnv("CLAUDE_CODE_CHILD_SESSION")
 		_, claudeCode := os.LookupEnv("CLAUDECODE")
 		session := os.Getenv("CLAUDE_CODE_SESSION_ID")
+		// The trust gate acts on the exact Desktop value and the project's clone,
+		// so a trial records both comparisons. Values themselves stay private.
 		record["claude_environment"] = map[string]bool{
 			"entrypoint_present":         entrypoint,
+			"entrypoint_desktop":         entrypointValue == "claude-desktop",
 			"project_dir_present":        project,
+			"project_dir_same_clone":     projectSameClone,
 			"project_dir_same_checkout":  projectSameCheckout,
 			"child_session_present":      child,
 			"claudecode_present":         claudeCode,
