@@ -17,6 +17,8 @@ All notable changes to Flinch are recorded here. The format follows [Keep a Chan
 - `flinch check --ci --base` reports an error before running checks if the requested revision is missing.
 - Stop and CI read direct check records from Git, including IDs with non-ASCII characters. Records stored in archive subdirectories stay outside the catalog.
 - `flinch check --ci --base` reports a deleted check record from the PR base and exits with status 1. Previously, CI looked for records in the proposed checkout, so deleting a record also removed it from the integrity check.
+- Flinch can prove an existing Go, pytest, Vitest, or Jest case when a correction changes what it tests. It tries cases at the lines that triggered the nomination first. A turn that repairs a protected case or exhausts its repair budget closes without registering the reversed expectation.
+- Integrity checks for Vitest and Jest use the full suite and case name, including named table rows. Editing a same-named case in another suite leaves the protected case intact.
 
 ## [0.1.2] - 2026-11-25
 

@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/angelnicolasc/flinch/internal/reflex"
+	"github.com/angelnicolasc/flinch/internal/testcase"
 )
 
 // artifactCaseIntact compares only the protected case/rule in currBytes against trustedBytes.
@@ -328,78 +329,18 @@ func extractPythonDefBlock(src, fnName string) (string, bool) {
 }
 
 func compareJSTestCase(selector string, trustedBytes, currBytes []byte) (bool, string) {
-	// Extract the leaf test name from "describe > it" or "describe › it" or plain name.
-	leaf := selector
-	for _, sep := range []string{" › ", " > "} {
-		if idx := strings.LastIndex(leaf, sep); idx >= 0 {
-			leaf = strings.TrimSpace(leaf[idx+len(sep):])
-		}
+	trusted, ok := testcase.JavaScriptCase(trustedBytes, selector)
+	if !ok {
+		return false, fmt.Sprintf("cannot uniquely identify JS/TS test case %q in the trusted version", selector)
 	}
-	tBlock, okT := extractJSCaseSnippet(string(trustedBytes), leaf)
-	if !okT {
-		return false, fmt.Sprintf("could not locate JS/TS test case %q in trusted version", selector)
+	current, ok := testcase.JavaScriptCase(currBytes, trusted.Name)
+	if !ok || current.Name != trusted.Name {
+		return false, fmt.Sprintf("protected JS/TS test case %q is missing, renamed, or ambiguous", selector)
 	}
-	cBlock, okC := extractJSCaseSnippet(string(currBytes), leaf)
-	if !okC {
-		return false, fmt.Sprintf("protected JS/TS test case %q was removed or renamed", selector)
-	}
-	if tBlock == cBlock {
+	if trusted.Source == current.Source && trusted.Shared == current.Shared {
 		return true, ""
 	}
 	return false, fmt.Sprintf("protected JS/TS test case %q was modified", selector)
-}
-
-func extractJSCaseSnippet(src, leaf string) (string, bool) {
-	lines := strings.Split(src, "\n")
-	// 1. Direct it("leaf", ...) or test("leaf", ...) block
-	callRe := regexp.MustCompile(`\b(?:it|test)\s*\(\s*['"\x60]` + regexp.QuoteMeta(leaf) + `['"\x60]`)
-	for i, l := range lines {
-		if callRe.MatchString(l) {
-			return extractBalancedJSBlock(lines, i), true
-		}
-	}
-	// 2. Row inside test.each / it.each containing the exact case label (plus enclosing test.each assertion body).
-	quotedSingle := "'" + leaf + "'"
-	quotedDouble := `"` + leaf + `"`
-	for i, l := range lines {
-		if strings.Contains(l, quotedSingle) || strings.Contains(l, quotedDouble) {
-			row := strings.TrimSpace(l)
-			// Find the following `(`...`)` assertion callback of the enclosing test.each block.
-			callback := ""
-			for j := i + 1; j < len(lines); j++ {
-				if strings.Contains(lines[j], "=>") {
-					callback = extractBalancedJSBlock(lines, j)
-					break
-				}
-			}
-			return row + "\n" + callback, true
-		}
-	}
-	return "", false
-}
-
-func extractBalancedJSBlock(lines []string, startLine int) string {
-	var b strings.Builder
-	depth := 0
-	seenOpen := false
-	for i := startLine; i < len(lines); i++ {
-		l := lines[i]
-		b.WriteString(strings.TrimSpace(l))
-		b.WriteByte('\n')
-		for _, ch := range l {
-			switch ch {
-			case '(', '{':
-				depth++
-				seenOpen = true
-			case ')', '}':
-				depth--
-			}
-		}
-		if seenOpen && depth <= 0 {
-			break
-		}
-	}
-	return strings.TrimSpace(b.String())
 }
 
 func isSharedConfigFile(relPath string) bool {

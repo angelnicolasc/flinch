@@ -24,6 +24,7 @@ import (
 	"github.com/angelnicolasc/flinch/internal/prove"
 	"github.com/angelnicolasc/flinch/internal/reflex"
 	"github.com/angelnicolasc/flinch/internal/runner"
+	"github.com/angelnicolasc/flinch/internal/testcase"
 )
 
 // AuthoringBudgetCap is the experimental threshold for in-turn authoring including proof.
@@ -54,13 +55,15 @@ type ReuseOutcome struct {
 	UnrecognizedAssertions int                       `json:"no_recognized_assertion,omitempty"`
 }
 
-// DiscoveredTestCandidate identifies one newly added test case and an adjacent sibling neighbor.
+// DiscoveredTestCandidate identifies a new or edited test case and a neighboring case.
 type DiscoveredTestCandidate struct {
 	Tool             string
 	Path             string
 	Scope            string
 	Selector         string
 	NeighborSelector string
+	beforeLines      gitutil.LineRange
+	afterLines       gitutil.LineRange
 }
 
 // AuthoringEvent logs authoring metrics (nominations, skips by reason, reused, written, timeouts) locally.
@@ -132,10 +135,14 @@ func ParseSkipFromText(text string) (string, bool) {
 	return strings.TrimSpace(m[1]), true
 }
 
-// ReuseFirst inspects the diff between brokenRef and fixedRef for an existing protection
-// (such as a newly added test case/row or a valid managed guidance line) and proves it
-// without requiring a continuation.
+// ReuseFirst tries the protections in a fix diff without a nomination preference.
 func ReuseFirst(ctx context.Context, repoRoot string, cfg config.Config, brokenRef, fixedRef string, timeout time.Duration, hosts ...string) (ReuseOutcome, error) {
+	return Nomination{BrokenRef: brokenRef, FixedRef: fixedRef}.Reuse(ctx, repoRoot, cfg, timeout, hosts...)
+}
+
+// Reuse tries cases at the nominated edits first, then the remaining protections in the fix.
+func (nom Nomination) Reuse(ctx context.Context, repoRoot string, cfg config.Config, timeout time.Duration, hosts ...string) (ReuseOutcome, error) {
+	brokenRef, fixedRef := nom.BrokenRef, nom.FixedRef
 	ctx = runner.WithCommandRepository(ctx, repoRoot)
 	if timeout <= 0 {
 		timeout = AuthoringBudgetCap
@@ -146,6 +153,11 @@ func ReuseFirst(ctx context.Context, repoRoot string, cfg config.Config, brokenR
 	candidates, err := ExtractTestCandidates(ctx, repoRoot, cfg, brokenRef, fixedRef)
 	if err != nil {
 		return ReuseOutcome{Status: ReuseInconclusive, Reason: err.Error()}, nil
+	}
+	if len(nom.overlaps) > 0 {
+		sort.SliceStable(candidates, func(i, j int) bool {
+			return nom.candidatePriority(candidates[i]) > nom.candidatePriority(candidates[j])
+		})
 	}
 
 	hadInconclusive := false
@@ -283,7 +295,7 @@ func ReuseFirst(ctx context.Context, repoRoot string, cfg config.Config, brokenR
 	return ReuseOutcome{Status: ReuseNone}, nil
 }
 
-// ExtractTestCandidates discovers newly added test cases and sibling legitimate neighbors
+// ExtractTestCandidates discovers new or edited test cases and sibling legitimate neighbors
 // from the diff between brokenRef and fixedRef across Go, Python, and JS/TS test files.
 func ExtractTestCandidates(ctx context.Context, repoRoot string, cfg config.Config, brokenRef, fixedRef string) ([]DiscoveredTestCandidate, error) {
 	changes, err := gitutil.DiffFileChanges(ctx, repoRoot, brokenRef, fixedRef)
@@ -333,65 +345,19 @@ func ExtractTestCandidates(ctx context.Context, repoRoot string, cfg config.Conf
 }
 
 func extractGoTestCandidates(relPath, scope string, beforeBytes, afterBytes []byte) []DiscoveredTestCandidate {
-	beforeCases := listGoTestCases(beforeBytes)
-	afterCases := listGoTestCases(afterBytes)
-	beforeSet := make(map[string]bool, len(beforeCases))
-	for _, c := range beforeCases {
-		beforeSet[c] = true
-	}
-
-	var added []string
-	for _, c := range afterCases {
-		if !beforeSet[c] {
-			added = append(added, c)
-		}
-	}
-	if len(added) == 0 {
-		return nil
-	}
-
-	// Prefer specific subtest/table rows over parent wrapper functions when both are added.
-	hasSubtest := false
-	for _, a := range added {
-		if strings.Contains(a, "/") {
-			hasSubtest = true
-			break
-		}
-	}
-
-	var out []DiscoveredTestCandidate
-	for _, sel := range added {
-		if hasSubtest && !strings.Contains(sel, "/") {
-			continue
-		}
-		neighbor := pickNeighbor(sel, beforeCases, afterCases)
-		out = append(out, DiscoveredTestCandidate{
-			Tool:             "go-test",
-			Path:             relPath,
-			Scope:            scope,
-			Selector:         sel,
-			NeighborSelector: neighbor,
-		})
-	}
-	return out
+	return changedTestCases("go-test", relPath, scope, goTestRegions(beforeBytes), goTestRegions(afterBytes))
 }
 
-func listGoTestCases(src []byte) []string {
-	if len(src) == 0 {
-		return nil
-	}
+func goTestRegions(src []byte) []testcase.Region {
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "test.go", src, 0)
+	file, err := parser.ParseFile(fset, "test.go", src, parser.SkipObjectResolution)
 	if err != nil {
 		return nil
 	}
-	var out []string
-	seen := make(map[string]bool)
-	add := func(s string) {
-		if s != "" && !seen[s] {
-			seen[s] = true
-			out = append(out, s)
-		}
+	var out []testcase.Region
+	add := func(name string, node ast.Node) {
+		out = append(out, testcase.Region{Name: name, Source: goNodeText(node),
+			Lines: gitutil.LineRange{Start: fset.PositionFor(node.Pos(), false).Line, End: fset.PositionFor(node.End(), false).Line}})
 	}
 
 	for _, decl := range file.Decls {
@@ -399,51 +365,78 @@ func listGoTestCases(src []byte) []string {
 		if !ok || !strings.HasPrefix(fn.Name.Name, "Test") || fn.Body == nil {
 			continue
 		}
-		fnName := fn.Name.Name
-		foundChild := false
-
-		// 1. Direct t.Run("name", ...) subtests
-		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok || len(call.Args) < 2 {
-				return true
-			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel.Name != "Run" {
-				return true
-			}
-			if lit, ok := call.Args[0].(*ast.BasicLit); ok && lit.Kind == token.STRING {
-				if unq, err := strconv.Unquote(lit.Value); err == nil && unq != "" {
-					foundChild = true
-					add(fnName + "/" + strings.ReplaceAll(strings.TrimSpace(unq), " ", "_"))
-				}
-			}
-			return true
-		})
-
-		// 2. Table-driven slice/map literals inside Test*
-		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			comp, ok := n.(*ast.CompositeLit)
-			if !ok || len(comp.Elts) == 0 {
-				return true
-			}
-			switch comp.Type.(type) {
-			case *ast.ArrayType, *ast.MapType:
-				for _, elt := range comp.Elts {
-					if name, ok := extractGoTableCaseName(elt); ok && name != "" {
-						foundChild = true
-						add(fnName + "/" + strings.ReplaceAll(strings.TrimSpace(name), " ", "_"))
-					}
-				}
-			}
-			return true
-		})
-
-		if !foundChild {
-			add(fnName)
+		if !goChildRegions(fn.Name.Name, fn.Body, add) {
+			add(fn.Name.Name, fn)
 		}
 	}
 	return out
+}
+
+// A table row or a literal t.Run owns its region. A nested subtest uses its
+// runtime parent path and does not turn its enclosing wrapper into a candidate.
+func goChildRegions(parent string, body *ast.BlockStmt, add func(string, ast.Node)) bool {
+	found := false
+	hasTableRun := false
+	ast.Inspect(body, func(node ast.Node) bool {
+		if hasTableRun {
+			return false
+		}
+		switch n := node.(type) {
+		case *ast.FuncLit:
+			return false // A nested callback owns its own subtests.
+		case *ast.CallExpr:
+			sel, ok := n.Fun.(*ast.SelectorExpr)
+			if ok && sel.Sel.Name == "Run" && len(n.Args) >= 2 {
+				_, literal := n.Args[0].(*ast.BasicLit)
+				hasTableRun = !literal
+			}
+		}
+		return !hasTableRun
+	})
+	ast.Inspect(body, func(node ast.Node) bool {
+		switch n := node.(type) {
+		case *ast.CallExpr:
+			sel, ok := n.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "Run" || len(n.Args) < 2 {
+				return true
+			}
+			lit, ok := n.Args[0].(*ast.BasicLit)
+			if !ok || lit.Kind != token.STRING {
+				return true
+			}
+			name, err := strconv.Unquote(lit.Value)
+			if err != nil || name == "" {
+				return true
+			}
+			selector := parent + "/" + strings.ReplaceAll(strings.TrimSpace(name), " ", "_")
+			callback, ok := n.Args[1].(*ast.FuncLit)
+			if !ok || !goChildRegions(selector, callback.Body, add) {
+				add(selector, n)
+			}
+			found = true
+			return false
+		case *ast.CompositeLit:
+			if !hasTableRun {
+				return true
+			}
+			switch n.Type.(type) {
+			case *ast.ArrayType, *ast.MapType:
+				hasRows := false
+				for _, elt := range n.Elts {
+					if name, ok := extractGoTableCaseName(elt); ok && name != "" {
+						add(parent+"/"+strings.ReplaceAll(strings.TrimSpace(name), " ", "_"), elt)
+						hasRows = true
+					}
+				}
+				if hasRows {
+					found = true
+					return false
+				}
+			}
+		}
+		return true
+	})
+	return found
 }
 
 func extractGoTableCaseName(elt ast.Expr) (string, bool) {
@@ -487,128 +480,12 @@ func extractGoTableCaseName(elt ast.Expr) (string, bool) {
 	return "", false
 }
 
-var pyTestFnRe = regexp.MustCompile(`(?m)^def\s+(test_[A-Za-z0-9_]+)\s*\(`)
-
 func extractPythonTestCandidates(relPath, scope string, beforeBytes, afterBytes []byte) []DiscoveredTestCandidate {
-	listPy := func(b []byte) []string {
-		var res []string
-		for _, m := range pyTestFnRe.FindAllStringSubmatch(string(b), -1) {
-			res = append(res, relPath+"::"+m[1])
-		}
-		return res
-	}
-	before := listPy(beforeBytes)
-	after := listPy(afterBytes)
-	bSet := make(map[string]bool, len(before))
-	for _, c := range before {
-		bSet[c] = true
-	}
-	var out []DiscoveredTestCandidate
-	for _, sel := range after {
-		if bSet[sel] {
-			continue
-		}
-		out = append(out, DiscoveredTestCandidate{
-			Tool:             "pytest",
-			Path:             relPath,
-			Scope:            scope,
-			Selector:         sel,
-			NeighborSelector: pickNeighbor(sel, before, after),
-		})
-	}
-	return out
+	return changedTestCases("pytest", relPath, scope, testcase.Python(relPath, beforeBytes), testcase.Python(relPath, afterBytes))
 }
-
-var (
-	jsDescribeRe  = regexp.MustCompile(`\bdescribe\s*\(\s*['"\x60]([^'"\x60]+)['"\x60]`)
-	jsItRe        = regexp.MustCompile(`\b(?:it|test)\s*\(\s*['"\x60]([^'"\x60]+)['"\x60]`)
-	jsEachStartRe = regexp.MustCompile(`\b(?:it|test)\.each\s*(?:<[^>]+>)?\s*\(\s*\[`)
-	jsRowNameObj  = regexp.MustCompile(`\b(?:name|title|desc|case)\s*:\s*['"\x60]([^'"\x60]+)['"\x60]`)
-	jsRowTuple    = regexp.MustCompile(`\[\s*['"\x60]([^'"\x60]+)['"\x60]`)
-	jsEachTitleRe = regexp.MustCompile(`\]\s*\)\s*\(\s*['"\x60]([^'"\x60]+)['"\x60]`)
-)
 
 func extractJSTestCandidates(tool, relPath, scope string, beforeBytes, afterBytes []byte) []DiscoveredTestCandidate {
-	before := listJSTestCases(string(beforeBytes))
-	after := listJSTestCases(string(afterBytes))
-	bSet := make(map[string]bool, len(before))
-	for _, c := range before {
-		bSet[c] = true
-	}
-	var out []DiscoveredTestCandidate
-	for _, sel := range after {
-		if bSet[sel] {
-			continue
-		}
-		out = append(out, DiscoveredTestCandidate{
-			Tool:             tool,
-			Path:             relPath,
-			Scope:            scope,
-			Selector:         sel,
-			NeighborSelector: pickNeighbor(sel, before, after),
-		})
-	}
-	return out
-}
-
-func listJSTestCases(src string) []string {
-	if strings.TrimSpace(src) == "" {
-		return nil
-	}
-	var out []string
-	seen := make(map[string]bool)
-	add := func(s string) {
-		if s != "" && !seen[s] {
-			seen[s] = true
-			out = append(out, s)
-		}
-	}
-
-	describeName := ""
-	if m := jsDescribeRe.FindStringSubmatch(src); m != nil {
-		describeName = strings.TrimSpace(m[1])
-	}
-	qualify := func(title string) string {
-		if describeName != "" {
-			return describeName + " › " + strings.TrimSpace(title)
-		}
-		return strings.TrimSpace(title)
-	}
-
-	// 1. Direct it(...) / test(...) calls
-	for _, m := range jsItRe.FindAllStringSubmatch(src, -1) {
-		add(qualify(m[1]))
-	}
-
-	// 2. test.each([...])('title', ...) rows
-	eachLocs := jsEachStartRe.FindAllStringIndex(src, -1)
-	for _, loc := range eachLocs {
-		rest := src[loc[0]:]
-		titleMatch := jsEachTitleRe.FindStringSubmatchIndex(rest)
-		if titleMatch == nil {
-			continue
-		}
-		tableBody := rest[:titleMatch[0]+1]
-		titleTemplate := rest[titleMatch[2]:titleMatch[3]]
-
-		var rowNames []string
-		for _, m := range jsRowNameObj.FindAllStringSubmatch(tableBody, -1) {
-			rowNames = append(rowNames, m[1])
-		}
-		if len(rowNames) == 0 {
-			for _, m := range jsRowTuple.FindAllStringSubmatch(tableBody, -1) {
-				rowNames = append(rowNames, m[1])
-			}
-		}
-		for _, rn := range rowNames {
-			expanded := titleTemplate
-			for _, ph := range []string{"$name", "$title", "$desc", "$case", "%s"} {
-				expanded = strings.Replace(expanded, ph, rn, 1)
-			}
-			add(qualify(expanded))
-		}
-	}
-	return out
+	return changedTestCases(tool, relPath, scope, testcase.JavaScript(beforeBytes), testcase.JavaScript(afterBytes))
 }
 
 func pickNeighbor(sel string, beforeCases, afterCases []string) string {

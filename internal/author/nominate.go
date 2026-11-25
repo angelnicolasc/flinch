@@ -17,6 +17,8 @@ type Nomination struct {
 	OverlappingSymbols []string `json:"overlapping_symbols,omitempty"`
 	BrokenRef          string   `json:"broken_ref,omitempty"`
 	FixedRef           string   `json:"fixed_ref,omitempty"`
+	// Keyed by the current path, including when a correction renames the file.
+	overlaps map[string][]gitutil.DiffHunk
 }
 
 // NominateCorrection implements the deterministic nomination rule:
@@ -55,6 +57,7 @@ func NominateCorrection(ctx context.Context, repoRoot, prevStart, prevEnd, currS
 	}
 
 	var overlapFiles []string
+	overlaps := make(map[string][]gitutil.DiffHunk)
 	for _, curr := range currChanges {
 		if isIgnoredForNomination(curr.Path) || len(curr.RemovedLines) == 0 {
 			continue
@@ -64,7 +67,11 @@ func NominateCorrection(ctx context.Context, repoRoot, prevStart, prevEnd, currS
 			path = curr.OldPath
 		}
 		prev, ok := prevByPath[path]
-		if !ok || !hunksOverlap(prev, curr) {
+		if !ok {
+			continue
+		}
+		hunks := overlappingHunks(prev.AddedLines, curr.Hunks)
+		if len(hunks) == 0 {
 			continue
 		}
 		// The line coordinates refer to the same file contents on the two middle trees.
@@ -77,6 +84,7 @@ func NominateCorrection(ctx context.Context, repoRoot, prevStart, prevEnd, currS
 			}
 		}
 		overlapFiles = append(overlapFiles, curr.Path)
+		overlaps[curr.Path] = hunks
 	}
 
 	if len(overlapFiles) == 0 {
@@ -89,18 +97,45 @@ func NominateCorrection(ctx context.Context, repoRoot, prevStart, prevEnd, currS
 		OverlappingFiles: overlapFiles,
 		BrokenRef:        currStart,
 		FixedRef:         currEnd,
+		overlaps:         overlaps,
 	}, nil
 }
 
-func hunksOverlap(prev, curr gitutil.FileChange) bool {
-	for _, added := range prev.AddedLines {
-		for _, removed := range curr.RemovedLines {
-			if added.Start <= removed.End && removed.Start <= added.End {
-				return true
+func overlappingHunks(previousAdditions []gitutil.LineRange, current []gitutil.DiffHunk) []gitutil.DiffHunk {
+	var overlaps []gitutil.DiffHunk
+	for _, hunk := range current {
+		// Git reports each side in line order. Only additions still in this hunk can intersect it.
+		for len(previousAdditions) > 0 && previousAdditions[0].End < hunk.Before.Start {
+			previousAdditions = previousAdditions[1:]
+		}
+		for _, added := range previousAdditions {
+			if added.Start > hunk.Before.End {
+				break
 			}
+			overlaps = append(overlaps, gitutil.DiffHunk{
+				Before: gitutil.LineRange{Start: max(added.Start, hunk.Before.Start), End: min(added.End, hunk.Before.End)},
+				After:  hunk.After,
+			})
 		}
 	}
-	return false
+	return overlaps
+}
+
+func (nom Nomination) candidatePriority(c DiscoveredTestCandidate) int {
+	for _, h := range nom.overlaps[c.Path] {
+		// Existing cases have exact coordinates in the tree where the overlap was measured.
+		if c.beforeLines.Start > 0 {
+			if c.beforeLines.Overlaps(h.Before) {
+				return 2
+			}
+			continue
+		}
+		// A replacement with a new selector only has coordinates on the added side of the hunk.
+		if c.afterLines.Overlaps(h.After) {
+			return 1
+		}
+	}
+	return 0
 }
 
 func isIgnoredForNomination(relPath string) bool {

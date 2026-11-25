@@ -390,6 +390,8 @@ func handleStop(
 	}
 	if turnRes.Blocking {
 		_ = st.Record(stats.Event{Kind: stats.EventTurnIntercepted, Surface: string(host)})
+		// A repair continuation uses the original checkpoint, but can no longer author a check in this turn.
+		cp.PreviousStartSnap, cp.PreviousEndSnap = "", ""
 		return requestContinuation(turnRes.DiagnosticMessage)
 	}
 
@@ -427,6 +429,14 @@ func handleStop(
 		return allowResp
 	}
 
+	// An advisory or exhausted finding still belongs to enforcement. After a successful
+	// repair, the continuation has no prior edit pair to use for authoring.
+	if len(turnRes.Findings) > 0 || len(turnRes.IntegrityViolations) > 0 ||
+		(cp.TotalContinuations > 0 && cp.PreviousEndSnap == "") {
+		finalizeTurn()
+		return allowResp
+	}
+
 	// 2. Follow-up Stop AFTER an authoring continuation was requested.
 	if cp.AuthoringAttempted {
 		remaining := author.AuthoringBudgetCap
@@ -445,7 +455,12 @@ func handleStop(
 		}
 
 		proofCtx, cancelProof := context.WithTimeout(ctx, remaining)
-		outcome, _ := author.ReuseFirst(proofCtx, repoRoot, cfg, cp.SnapshotSHA, currEndSnap, remaining, string(host))
+		// The author may have moved the test while adding a check. Recompute its overlap on the final diff.
+		nom, _ := author.NominateCorrection(proofCtx, repoRoot, cp.PreviousStartSnap, cp.PreviousEndSnap, cp.SnapshotSHA, currEndSnap)
+		if !nom.Nominated {
+			nom = author.Nomination{BrokenRef: cp.SnapshotSHA, FixedRef: currEndSnap}
+		}
+		outcome, _ := nom.Reuse(proofCtx, repoRoot, cfg, remaining, string(host))
 		cancelProof()
 		if outcome.CommandApprovalDigest != "" {
 			approvalDigests = append(approvalDigests, outcome.CommandApprovalDigest)
@@ -502,7 +517,7 @@ func handleStop(
 
 	// 4. Reuse-first: inspect the fix diff for a protection the agent already wrote!
 	authorStart := time.Now().UTC()
-	outcome, _ := author.ReuseFirst(ctx, repoRoot, cfg, nom.BrokenRef, nom.FixedRef, author.AuthoringBudgetCap, string(host))
+	outcome, _ := nom.Reuse(ctx, repoRoot, cfg, author.AuthoringBudgetCap, string(host))
 	if outcome.CommandApprovalDigest != "" {
 		approvalDigests = append(approvalDigests, outcome.CommandApprovalDigest)
 	}

@@ -24,6 +24,17 @@ type LineRange struct {
 	End   int `json:"end"`
 }
 
+// Overlaps reports whether two nonempty ranges share a line.
+func (r LineRange) Overlaps(other LineRange) bool {
+	return r.Start > 0 && other.Start > 0 && r.Start <= other.End && other.Start <= r.End
+}
+
+// DiffHunk pairs the changed lines of one zero-context hunk. A missing side has a zero range.
+type DiffHunk struct {
+	Before LineRange
+	After  LineRange
+}
+
 // FileChange captures a diff entry between two Git revisions, including renames and insertion points.
 type FileChange struct {
 	Path         string      `json:"path"`
@@ -33,6 +44,7 @@ type FileChange struct {
 	AddedLines   []LineRange `json:"added_lines,omitempty"`
 	InsertionsAt []int       `json:"insertions_at,omitempty"`
 	Hunk         string      `json:"hunk,omitempty"`
+	Hunks        []DiffHunk  `json:"-"`
 }
 
 // Run executes git with args in dir and returns stdout, stderr, and any error.
@@ -288,21 +300,19 @@ func DiffFileChanges(ctx context.Context, repoRoot, baseRef, headRef string) ([]
 			if m[4] != "" {
 				newCount, _ = strconv.Atoi(m[4])
 			}
+			var hunk DiffHunk
 			if oldCount > 0 {
-				changes[currentIdx].RemovedLines = append(changes[currentIdx].RemovedLines, LineRange{
-					Start: oldStart,
-					End:   oldStart + oldCount - 1,
-				})
+				hunk.Before = LineRange{Start: oldStart, End: oldStart + oldCount - 1}
+				changes[currentIdx].RemovedLines = append(changes[currentIdx].RemovedLines, hunk.Before)
 			} else if newCount > 0 {
 				// Pure insertion in head: anchor at oldStart (broken-tree coordinate).
 				changes[currentIdx].InsertionsAt = append(changes[currentIdx].InsertionsAt, oldStart)
 			}
 			if newCount > 0 {
-				changes[currentIdx].AddedLines = append(changes[currentIdx].AddedLines, LineRange{
-					Start: newStart,
-					End:   newStart + newCount - 1,
-				})
+				hunk.After = LineRange{Start: newStart, End: newStart + newCount - 1}
+				changes[currentIdx].AddedLines = append(changes[currentIdx].AddedLines, hunk.After)
 			}
+			changes[currentIdx].Hunks = append(changes[currentIdx].Hunks, hunk)
 			currentHunk.WriteString(line)
 			currentHunk.WriteByte('\n')
 			continue
