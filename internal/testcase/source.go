@@ -10,11 +10,12 @@ import (
 
 // Region identifies the source owned by one runnable test case.
 type Region struct {
-	Name   string
-	Source string
-	Shared string // callback used by each row of a JS test.each table
-	Lines  gitutil.LineRange
-	leaf   string // unqualified runtime title for older JS selectors
+	Name        string
+	Source      string
+	Shared      string // callback used by each row of a JS test.each table
+	Lines       gitutil.LineRange
+	SharedLines gitutil.LineRange
+	leaf        string // unqualified runtime title for older JS selectors
 }
 
 // Tokens retain literal contents and matched delimiters so a comment, string,
@@ -318,7 +319,8 @@ func javaScriptRegions(src string, contents func([]caseToken) string) []Region {
 						expanded = strings.Replace(expanded, ph, name, 1)
 					}
 					out = append(out, Region{Name: prefix + expanded, leaf: expanded, Source: contents(row), Shared: body,
-						Lines: gitutil.LineRange{Start: ts[j].line, End: ts[end].last}})
+						Lines:       gitutil.LineRange{Start: ts[j].line, End: ts[end].last},
+						SharedLines: gitutil.LineRange{Start: ts[open].line, End: ts[close].last}})
 				}
 			}
 			j = end

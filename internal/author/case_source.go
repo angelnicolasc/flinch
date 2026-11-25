@@ -37,11 +37,17 @@ func changedTestCases(tool, path, scope string, before, after []testcase.Region)
 		if existed && old.Source == r.Source && old.Shared == r.Shared {
 			continue
 		}
+		beforeLines := caseLines{LineRange: old.Lines}
+		afterLines := caseLines{LineRange: r.Lines}
+		if old.Shared != r.Shared {
+			beforeLines.callback = old.SharedLines
+			afterLines.callback = r.SharedLines
+		}
 		out = append(out, DiscoveredTestCandidate{
 			Tool: tool, Path: path, Scope: scope, Selector: r.Name,
 			NeighborSelector: pickNeighbor(r.Name, beforeNames, afterNames),
-			beforeLines:      old.Lines,
-			afterLines:       r.Lines,
+			beforeLines:      beforeLines,
+			afterLines:       afterLines,
 		})
 	}
 	return out

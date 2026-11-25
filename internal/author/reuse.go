@@ -62,8 +62,17 @@ type DiscoveredTestCandidate struct {
 	Scope            string
 	Selector         string
 	NeighborSelector string
-	beforeLines      gitutil.LineRange
-	afterLines       gitutil.LineRange
+	beforeLines      caseLines
+	afterLines       caseLines
+}
+
+type caseLines struct {
+	gitutil.LineRange
+	callback gitutil.LineRange
+}
+
+func (c caseLines) Overlaps(hunk gitutil.LineRange) bool {
+	return c.LineRange.Overlaps(hunk) || c.callback.Overlaps(hunk)
 }
 
 // AuthoringEvent logs authoring metrics (nominations, skips by reason, reused, written, timeouts) locally.
