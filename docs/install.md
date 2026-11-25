@@ -91,34 +91,50 @@ $arch = switch ([Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToS
     'Arm64' { 'arm64' }
     default { throw 'This CPU has no release archive.' }
 }
-$release = Invoke-RestMethod 'https://api.github.com/repos/angelnicolasc/flinch/releases/latest'
-$tag = $release.tag_name
-if ($tag -notmatch '^v[0-9][0-9A-Za-z.-]*$') { throw 'A tagged release is required.' }
+$repo = 'https://github.com/angelnicolasc/flinch'
+$curlOptions = @('--disable', '--fail', '--silent', '--show-error', '--location', '--tlsv1.2',
+                 '--proto', '=https', '--proto-redir', '=https')
+$latest = curl.exe @curlOptions --head --output NUL --write-out '%{url_effective}' "$repo/releases/latest"
+if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the latest release.' }
+if ($latest -cmatch '^https://github\.com/angelnicolasc/flinch/releases/tag/(v[0-9][0-9A-Za-z.-]*)$') {
+    $tag = $Matches[1]
+} else { throw 'A tagged Flinch release is required.' }
 $base = "flinch_$($tag.Substring(1))_windows_$arch"
 $asset = "$base.zip"
-$tempDir = New-Item -ItemType Directory -Path (Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString()))
-$releaseUrl = "https://github.com/angelnicolasc/flinch/releases/download/$tag"
+$releaseUrl = "$repo/releases/download/$tag"
+$checksums = curl.exe @curlOptions "$releaseUrl/checksums.txt"
+if ($LASTEXITCODE -ne 0) { throw 'Could not download the release checksums.' }
+$expected = @(foreach ($line in $checksums) {
+    if ($line -match '^([0-9a-fA-F]{64})\s+\*?(.+)$' -and $Matches[2] -ceq $asset) { $Matches[1] }
+})
+if ($expected.Count -ne 1) { throw "Expected one checksum for $asset." }
+$zip = [IO.Path]::GetTempFileName()
+$staged = $null
 try {
-    foreach ($name in @($asset, 'checksums.txt')) {
-        Invoke-WebRequest -UseBasicParsing "$releaseUrl/$name" -OutFile (Join-Path $tempDir.FullName $name)
+    curl.exe @curlOptions --output $zip "$releaseUrl/$asset"
+    if ($LASTEXITCODE -ne 0) { throw "Could not download $asset." }
+    if ((Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash -ne $expected[0]) {
+        throw 'Archive SHA-256 mismatch.'
     }
-    $expected = @(foreach ($line in Get-Content -LiteralPath (Join-Path $tempDir.FullName 'checksums.txt')) {
-        if ($line -match '^([0-9a-fA-F]{64})\s+\*?(.+)$' -and $Matches[2] -ceq $asset) { $Matches[1] }
-    })
-    $zip = Join-Path $tempDir.FullName $asset
-    if ($expected.Count -ne 1 -or (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash -ne $expected[0]) {
-        throw 'Archive SHA-256 mismatch or missing checksum.'
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $archive = [IO.Compression.ZipFile]::OpenRead($zip)
+    try {
+        $entries = @($archive.Entries | Where-Object { $_.FullName -ceq "$base/flinch.exe" })
+        if ($entries.Count -ne 1) { throw "Expected one $base/flinch.exe entry in $asset." }
+        $binDir = Join-Path $env:LOCALAPPDATA 'Flinch\bin'
+        [IO.Directory]::CreateDirectory($binDir) | Out-Null
+        $flinch = Join-Path $binDir 'flinch.exe'
+        $staged = Join-Path $binDir ([Guid]::NewGuid().ToString() + '.tmp')
+        [IO.Compression.ZipFileExtensions]::ExtractToFile($entries[0], $staged)
+    } finally { $archive.Dispose() }
+    if ([IO.File]::Exists($flinch)) {
+        [IO.File]::Replace($staged, $flinch, [System.Management.Automation.Language.NullString]::Value)
+    } else {
+        [IO.File]::Move($staged, $flinch)
     }
-    Expand-Archive -LiteralPath $zip -DestinationPath $tempDir.FullName
-    $binDir = Join-Path $env:LOCALAPPDATA 'Flinch\bin'
-    New-Item -ItemType Directory -Force -Path $binDir | Out-Null
-    $flinch = Join-Path $binDir 'flinch.exe'
-    Copy-Item -LiteralPath (Join-Path $tempDir.FullName "$base\flinch.exe") -Destination $flinch -Force
 } finally {
-    $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\')
-    if ([IO.Path]::GetDirectoryName($tempDir.FullName) -eq $tempRoot) {
-        Remove-Item -LiteralPath $tempDir.FullName -Recurse -Force
-    }
+    [IO.File]::Delete($zip)
+    if ($staged) { [IO.File]::Delete($staged) }
 }
 & $flinch setup --plan
 ```
