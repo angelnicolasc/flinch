@@ -4,6 +4,8 @@ All notable changes to Flinch are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-25
+
 ### Fixed
 
 - `flinch setup` works with Homebrew on Apple Silicon. There Homebrew's prefix, `/opt/homebrew`, is also its own Git checkout, so setup took the installed executable for one inside a checkout and refused it. A formula in Homebrew's Cellar now counts as outside any checkout. Any other path in a checkout, or a Cellar in a repository that isn't Homebrew's, still doesn't.
@@ -38,6 +40,7 @@ First public release. Claude Code, Codex and Antigravity support is in Preview.
 - Check records under `.flinch/checks/`, checked against the trusted revision so that a deleted or weakened check is reported.
 - `flinch doctor`, `pause`, `resume`, `skip`, `report`, `check --ci` and `prove`.
 
-[Unreleased]: https://github.com/angelnicolasc/flinch/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/angelnicolasc/flinch/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/angelnicolasc/flinch/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/angelnicolasc/flinch/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/angelnicolasc/flinch/releases/tag/v0.1.0
