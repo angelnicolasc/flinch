@@ -19,6 +19,10 @@ all internal/runner TestRegressionDirtyCheckoutKeepsNativeRunnerCachesOutside
 all internal/e2e TestLivePytestAndRuffVerification
 all internal/e2e TestLivePytestAndRuffVerification/ruff
 all internal/e2e TestGrayMatterSeed27And55EndToEnd
+all internal/e2e TestCIIntegrityAgainstPullRequestBase/weakened_row
+all internal/e2e TestCIIntegrityAgainstPullRequestBase/deleted_record
+all internal/e2e TestCIIntegrityAgainstPullRequestBase/added_suppression
+all internal/e2e TestCIIntegrityAgainstPullRequestBase/product_fix
 
 # Real linters through the production adapters
 all internal/runner TestRealGolangCILintReportsAndClears

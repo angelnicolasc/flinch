@@ -605,7 +605,11 @@ func RunCI(ctx context.Context, repoRoot string, cfg config.Config, opts CIOptio
 		if ref == "" {
 			ref = cfg.Executor.TrustedRef
 		}
-		viols, intgErr := CheckIntegrity(ctx, repoRoot, ref, reflexes, changedFiles)
+		reviewed, err := loadTrustedReflexes(ctx, repoRoot, ref)
+		if err != nil {
+			return res, err
+		}
+		viols, intgErr := CheckIntegrity(ctx, repoRoot, ref, reviewed, changedFiles)
 		if intgErr == nil && len(viols) > 0 {
 			res.IntegrityViolations = viols
 		}

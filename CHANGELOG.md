@@ -4,6 +4,10 @@ All notable changes to Flinch are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Fixed
+
+- `flinch check --ci --base` reports a deleted check record from the PR base and exits with status 1. Previously, CI looked for records in the proposed checkout, so deleting a record also removed it from the integrity check.
+
 ## [0.1.2] - 2026-11-25
 
 ### Fixed

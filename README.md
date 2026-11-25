@@ -69,6 +69,8 @@ surfaces:
 
 Review the test and the record together with the fix. If any later session changes `src/retry.ts` and brings the bug back, Flinch runs that case at Stop and sends the agent back with the failure before it hands you the turn. `npm test` catches it in CI either way.
 
+[Require Flinch in CI](docs/ci.md) to check pull requests for changes to reviewed tests and records.
+
 Most turns show you nothing. When Flinch proves a test the agent already wrote, Claude Code and Codex get a one-line message that names the check. When the fix contains nothing reusable, Flinch asks the agent once to add a protection, or to reply `flinch skip: <reason>` if the correction was a one-off.
 
 ## What counts as a check
