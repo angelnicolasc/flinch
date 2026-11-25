@@ -88,6 +88,23 @@ func TestAssertionFailureUsesOriginAndStableDiagnostic(t *testing.T) {
 		{"jest", "tests/delay.test.ts", "Error: expect(received).toBe(expected)\nat Object.toBe (<tree>/tests/delay.test.ts:7:17)", true},
 		{"vitest", "tests/delay.test.ts", "AssertionError: setup\nat fixture (<tree>/src/fixture.ts:8:1)\nat <tree>/tests/delay.test.ts:7:7", false},
 		{"jest", "tests/delay.test.ts", "AssertionError: setup\nat helper (/deps/node_modules/custom/helpers.js:8:1)\nat <tree>/tests/delay.test.ts:7:7", false},
+		// .rejects as Vitest 3.2.4 and Vitest 5.1.1 report it. Vitest 5 bundles
+		// @vitest/expect into its own chunks, next to the runner.
+		{"vitest", "tests/delay.test.ts", "Error: promise resolved \"undefined\" instead of rejecting\n" +
+			"at _Assertion.__VITEST_REJECTS__ (file:///deps/node_modules/@vitest/expect/dist/index.js:1610:17)\n" +
+			"at _Assertion.propertyGetter (file:///deps/node_modules/chai/index.js:1557:27)\nat Reflect.get (<anonymous>)\n" +
+			"at Object.proxyGetter [as get] (file:///deps/node_modules/chai/index.js:1645:22)\nat <tree>/tests/delay.test.ts:7:33\n" +
+			"at file:///deps/node_modules/@vitest/runner/dist/chunk-hooks.js:155:11", true},
+		{"vitest", "tests/delay.test.ts", "Error: promise resolved \"undefined\" instead of rejecting\n" +
+			"at _Assertion.__VITEST_REJECTS__ (file:///deps/node_modules/vitest/dist/chunks/index.DNcttN5a.js:2179:33)\n" +
+			"at _Assertion.propertyGetter (file:///deps/node_modules/chai/index.js:1607:27)\nat Reflect.get (<anonymous>)\n" +
+			"at Object.proxyGetter [as get] (file:///deps/node_modules/chai/index.js:1696:22)\nat <tree>/tests/delay.test.ts:7:33\n" +
+			"at file:///deps/node_modules/vitest/dist/chunks/run.zBhXlcZQ.js:1695:35", true},
+		// The same words thrown by the test itself, or a Vitest 5 frame that
+		// isn't .resolves or .rejects, aren't a failed assertion.
+		{"vitest", "tests/delay.test.ts", "Error: promise resolved \"undefined\" instead of rejecting\nat helper (<tree>/tests/delay.test.ts:7:33)", false},
+		{"vitest", "tests/delay.test.ts", "Error: promise resolved \"undefined\" instead of rejecting\n" +
+			"at file:///deps/node_modules/vitest/dist/chunks/run.zBhXlcZQ.js:1695:35\nat <tree>/tests/delay.test.ts:7:33", false},
 	}
 	for _, c := range cases {
 		s := assertionSites{tool: c.tool, path: c.path, lines: []int{6, 7}}

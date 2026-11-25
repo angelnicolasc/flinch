@@ -97,7 +97,7 @@ func (s assertionSites) failure(diagnostic string) (assertionFailure, bool) {
 		_, ok := s.sourceLine(m[1], m[2])
 		return assertionFailure{m[2], diagnostic}, ok
 	case "vitest", "jest":
-		promiseFailure := strings.HasPrefix(diagnostic, "Error: promise ") && (strings.Contains(diagnostic, " instead of rejecting") || strings.Contains(diagnostic, " instead of resolving")) && strings.Contains(diagnostic, "/node_modules/@vitest/expect/")
+		promiseFailure := strings.HasPrefix(diagnostic, "Error: promise ") && (strings.Contains(diagnostic, " instead of rejecting") || strings.Contains(diagnostic, " instead of resolving")) && slices.ContainsFunc(lines, isVitestPromiseFrame)
 		if !jsAssertionFailure.MatchString(diagnostic) && !promiseFailure {
 			return assertionFailure{}, false
 		}
@@ -168,6 +168,23 @@ func (s assertionSites) goFailure(output []string) (assertionFailure, bool) {
 		message = append(message, text)
 	}
 	return assertionFailure{strings.Join(origins, ","), strings.Join(message, "\n")}, len(origins) > 0 && !needsTrace
+}
+
+// isVitestPromiseFrame reports whether a stack frame belongs to Vitest's own
+// .resolves or .rejects, which throws the "promise ... instead of" failure.
+// Vitest 3 ships that code as @vitest/expect. Vitest 5 bundles it into
+// vitest's own chunks, next to the runner, so there the frame is told apart
+// by the function Vitest names it with.
+func isVitestPromiseFrame(text string) bool {
+	text = strings.ReplaceAll(text, "\\", "/")
+	if !strings.HasPrefix(text, "at ") {
+		return false
+	}
+	if strings.Contains(text, "/node_modules/@vitest/expect/") {
+		return true
+	}
+	return strings.Contains(text, "/node_modules/vitest/dist/") &&
+		(strings.Contains(text, ".__VITEST_REJECTS__ (") || strings.Contains(text, ".__VITEST_RESOLVES__ ("))
 }
 
 func isJSRunnerFrame(text string) bool {
