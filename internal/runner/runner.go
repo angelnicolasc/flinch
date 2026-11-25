@@ -118,7 +118,7 @@ func DiscoverTools(ctx context.Context) map[string]ToolInfo {
 		{"go", []string{"go"}, []string{"version"}},
 		{"node", []string{"node"}, []string{"--version"}},
 		{"gh", []string{"gh"}, []string{"--version"}},
-		{"ast-grep", []string{"ast-grep", "sg"}, []string{"--version"}},
+		{"ast-grep", []string{"ast-grep"}, []string{"--version"}},
 		{"golangci-lint", []string{"golangci-lint"}, []string{"--version"}},
 		{"eslint", []string{"eslint"}, []string{"--version"}},
 		{"ruff", []string{"ruff"}, []string{"--version"}},

@@ -67,6 +67,9 @@ func RunArtifact(ctx context.Context, rootDir string, art reflex.Artifact, targe
 		res.TimedOut = true
 		return res, nil
 	}
+	if err := checkReportShape(art.Tool, res); err != nil {
+		return res, err
+	}
 	res.Findings = finding.Enrich(rootDir, res.Findings)
 	return res, nil
 }
@@ -358,8 +361,21 @@ func ParseESLintJSON(rootDir string, data []byte) []finding.Finding {
 	return out
 }
 
+var golangciVersion = regexp.MustCompile(`version v?([0-9]+)\.`)
+
+// golangciReportArgs selects the JSON report flags for the installed major
+// version. v2 removed --out-format, and prints statistics to stdout unless
+// they are turned off. An unrecognized version gets the v2 flags.
+func golangciReportArgs(version string) []string {
+	if m := golangciVersion.FindStringSubmatch(version); m != nil && m[1] == "1" {
+		return []string{"run", "--out-format", "json"}
+	}
+	return []string{"run", "--output.json.path=stdout", "--show-stats=false"}
+}
+
 func runGolangCILint(ctx context.Context, rootDir string, art reflex.Artifact, targetFiles []string) (LintRunResult, error) {
-	args := []string{"run", "--out-format", "json"}
+	version := ProbeTool(ctx, []string{"golangci-lint"}, "--version").Version
+	args := golangciReportArgs(version)
 	if art.Path != "" {
 		args = append(args, "--config", art.Path)
 	}
@@ -375,7 +391,7 @@ func runGolangCILint(ctx context.Context, rootDir string, art reflex.Artifact, t
 
 	res := LintRunResult{
 		Tool:        "golangci-lint",
-		ToolVersion: ProbeTool(ctx, []string{"golangci-lint"}, "--version").Version,
+		ToolVersion: version,
 		Command:     "golangci-lint " + strings.Join(args, " "),
 		DurationMS:  time.Since(start).Milliseconds(),
 		Stdout:      stdout.String(),
@@ -393,7 +409,7 @@ func runGolangCILint(ctx context.Context, rootDir string, art reflex.Artifact, t
 	return res, nil
 }
 
-// ParseGolangCILintJSON decodes `golangci-lint run --out-format json` output.
+// ParseGolangCILintJSON decodes the JSON report of golangci-lint v1 or v2.
 func ParseGolangCILintJSON(rootDir string, data []byte) []finding.Finding {
 	type glPos struct {
 		Filename string `json:"Filename"`
@@ -434,9 +450,11 @@ func ParseGolangCILintJSON(rootDir string, data []byte) []finding.Finding {
 }
 
 func runAstGrep(ctx context.Context, rootDir string, art reflex.Artifact, targetFiles []string) (LintRunResult, error) {
-	info := ProbeTool(ctx, []string{"ast-grep", "sg"}, "--version")
+	// Only the ast-grep name is trusted: on most Linux systems "sg" is the
+	// shadow-utils command that runs a shell under another group.
+	info := ProbeTool(ctx, []string{"ast-grep"}, "--version")
 	if !info.Available {
-		return LintRunResult{}, fmt.Errorf("ast-grep (or sg) binary not found in PATH")
+		return LintRunResult{}, fmt.Errorf("ast-grep binary not found in PATH")
 	}
 	args := []string{"scan", "--json=stream"}
 	if art.Path != "" {

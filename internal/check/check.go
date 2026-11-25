@@ -404,8 +404,11 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 			currRun, runErr := runner.RunArtifact(tctx, repoRoot, r.Artifact, targetArgForTool(r.Artifact.Tool, matchedFiles), remaining)
 			if runErr != nil {
 				reason := fmt.Sprintf("tool unavailable or failed to launch: %v", runErr)
-				if errors.Is(runErr, runner.ErrCommandApproval) {
+				switch {
+				case errors.Is(runErr, runner.ErrCommandApproval):
 					reason = runner.CommandPermissionNotice
+				case errors.Is(runErr, runner.ErrUnreadableReport):
+					reason = fmt.Sprintf("%v; failing open because an unreadable report can't show what the turn changed", runErr)
 				}
 				res.SkippedControls = append(res.SkippedControls, SkippedControl{ReflexID: r.ID, Reason: reason, CommandApprovalDigest: runner.CommandApprovalDigest(runErr)})
 				continue

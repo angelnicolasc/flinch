@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -37,8 +38,10 @@ func TestGolangciLintReusesOnlyItsCacheOutsideTheCheckout(t *testing.T) {
 	want := filepath.Join(base, "flinch", "golangci-lint")
 	run := func(ctx context.Context) (cache, scratch string) {
 		t.Helper()
+		// The probe prints paths instead of a JSON report, so the run reports
+		// ErrUnreadableReport. The environment it saw is still in Stdout.
 		result, err := RunArtifact(ctx, repo, reflex.Artifact{Tool: "golangci-lint"}, nil, 5*time.Second)
-		if err != nil || result.ExitCode != 0 {
+		if (err != nil && !errors.Is(err, ErrUnreadableReport)) || result.ExitCode != 0 {
 			t.Fatalf("cache probe: %+v, %v", result, err)
 		}
 		paths := strings.Split(strings.TrimSpace(strings.ReplaceAll(result.Stdout, "\r", "")), "\n")

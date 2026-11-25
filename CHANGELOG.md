@@ -7,6 +7,10 @@ All notable changes to Flinch are recorded here. The format follows [Keep a Chan
 ### Fixed
 
 - A failure inside a hook no longer reaches the host as an error. A panic used to exit with status 2, which Claude Code and Codex treat as a request to block the prompt or keep the agent working. The hook now answers with the host's allow response and exit code 0, sends its answer at most once, and records the last contained failure for `flinch doctor`.
+- Flinch no longer reads files outside the checkout when it adds a source line to a diagnostic. A path in a tool's report that leaves the checkout, directly or through a link, is never opened.
+- An unreadable linter report counts as a failed run instead of a clean one. If Ruff, ESLint or golangci-lint exits as if it finished but its JSON report has an unexpected shape, a proof is inconclusive and enforcement fails open, so a changed report format can't turn existing debt into new findings.
+- golangci-lint v2 works. Flinch detects the installed major version and uses `--output.json.path=stdout` for v2, keeping `--out-format json` for v1.
+- Flinch looks for ast-grep only under the name `ast-grep`. On most Linux systems `sg` is a different program, the shadow-utils command that runs a shell under another group.
 
 ## [0.1.0] - 2026-11-25
 
