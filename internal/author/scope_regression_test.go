@@ -61,9 +61,7 @@ func runProductOnlyRepeat(t *testing.T, scenario nativeCheckScenario, tools ...s
 			}
 			switch tool {
 			case "pytest":
-				if _, err := exec.LookPath("pytest"); err != nil {
-					t.Skip("pytest not installed")
-				}
+				testutil.RequireTool(t, "pytest")
 				write(repo, "pytest.ini", "[pytest]\npythonpath = .\n")
 				sourcePath, testPath = "src/delay.py", "tests/test_delay.py"
 				brokenCode = "def delay(value):\n    return value or 8\n"
@@ -76,10 +74,7 @@ func runProductOnlyRepeat(t *testing.T, scenario nativeCheckScenario, tools ...s
 				selectedName = "test_explicit_zero"
 				nativeArgs = []string{"pytest", "-q"}
 			case "vitest":
-				bin := os.Getenv("FLINCH_REAL_VITEST")
-				if bin == "" {
-					t.Skip("FLINCH_REAL_VITEST is not set")
-				}
+				bin := testutil.RequireToolEnv(t, "FLINCH_REAL_VITEST")
 				deps = filepath.Dir(filepath.Dir(bin))
 				linkDeps(repo)
 				lock, err := os.ReadFile(filepath.Join(filepath.Dir(deps), "package-lock.json"))

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/angelnicolasc/flinch/internal/reflex"
+	"github.com/angelnicolasc/flinch/internal/testutil"
 )
 
 func TestReportShapeSeparatesCleanFromUnreadable(t *testing.T) {
@@ -77,10 +78,7 @@ func TestGolangciReportArgsFollowTheMajorVersion(t *testing.T) {
 // TestRealGolangCILintReportsAndClears runs the installed golangci-lint, v1 or
 // v2, through the production adapter on a finding and on its fix.
 func TestRealGolangCILintReportsAndClears(t *testing.T) {
-	bin := os.Getenv("FLINCH_REAL_GOLANGCI_LINT")
-	if bin == "" {
-		t.Skip("set FLINCH_REAL_GOLANGCI_LINT to an installed golangci-lint")
-	}
+	bin := testutil.RequireToolEnv(t, "FLINCH_REAL_GOLANGCI_LINT")
 	t.Setenv("PATH", filepath.Dir(bin)+string(os.PathListSeparator)+os.Getenv("PATH"))
 	repo := t.TempDir()
 	write := func(src string) {

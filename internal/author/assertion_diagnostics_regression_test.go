@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"os/exec"
 	"strings"
 	"testing"
 
@@ -14,9 +13,7 @@ import (
 )
 
 func TestMissingAssertionReachesDoctorFromBothStopPaths(t *testing.T) {
-	if _, err := exec.LookPath("pytest"); err != nil {
-		t.Skip("pytest not installed")
-	}
+	testutil.RequireTool(t, "pytest")
 	for _, path := range []string{"existing", "authored"} {
 		t.Run(path, func(t *testing.T) {
 			repo := t.TempDir()

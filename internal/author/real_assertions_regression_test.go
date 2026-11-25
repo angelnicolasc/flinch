@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -15,6 +14,7 @@ import (
 	"github.com/angelnicolasc/flinch/internal/config"
 	"github.com/angelnicolasc/flinch/internal/gitutil"
 	"github.com/angelnicolasc/flinch/internal/runner"
+	"github.com/angelnicolasc/flinch/internal/testutil"
 )
 
 type assertionFixture struct {
@@ -159,24 +159,10 @@ func (f assertionFixture) repository(t *testing.T) (repo, brokenRef string, cfg 
 		fixtureWrite(t, repo, "go.mod", testifyFixtureMod)
 		fixtureWrite(t, repo, "go.sum", testifyFixtureSum)
 	case "pytest":
-		if _, err := exec.LookPath("pytest"); err != nil {
-			if os.Getenv("FLINCH_ASSERTION_DIAGNOSTICS") != "" {
-				t.Fatal("pytest is required to capture real runner diagnostics")
-			}
-			t.Skip("pytest not installed")
-		}
+		testutil.RequireTool(t, "pytest")
 		fixtureWrite(t, repo, "pytest.ini", "[pytest]\npythonpath = .\n")
 	case "jest", "vitest":
-		bin := os.Getenv("FLINCH_REAL_" + strings.ToUpper(f.tool))
-		if bin == "" {
-			if os.Getenv("FLINCH_ASSERTION_DIAGNOSTICS") != "" {
-				t.Fatalf("%s is required to capture real runner diagnostics", f.tool)
-			}
-			t.Skip("set FLINCH_REAL_" + strings.ToUpper(f.tool) + " to its installed binary")
-		}
-		if _, err := os.Stat(bin); err != nil {
-			t.Fatal(err)
-		}
+		bin := testutil.RequireToolEnv(t, "FLINCH_REAL_"+strings.ToUpper(f.tool))
 		deps := filepath.Dir(filepath.Dir(bin))
 		lock, err := os.ReadFile(filepath.Join(filepath.Dir(deps), "package-lock.json"))
 		if err != nil {

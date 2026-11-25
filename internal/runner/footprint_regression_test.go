@@ -2,21 +2,20 @@ package runner
 
 import (
 	"context"
-	"github.com/angelnicolasc/flinch/internal/gitutil"
-	"github.com/angelnicolasc/flinch/internal/reflex"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/angelnicolasc/flinch/internal/gitutil"
+	"github.com/angelnicolasc/flinch/internal/reflex"
+	"github.com/angelnicolasc/flinch/internal/testutil"
 )
 
 func TestRegressionDirtyCheckoutKeepsNativeRunnerCachesOutside(t *testing.T) {
 	for _, name := range []string{"pytest", "ruff"} {
-		if _, err := exec.LookPath(name); err != nil {
-			t.Skipf("%s unavailable", name)
-		}
+		testutil.RequireTool(t, name)
 	}
 	repo := t.TempDir()
 	ctx := context.Background()

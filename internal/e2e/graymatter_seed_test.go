@@ -18,6 +18,7 @@ import (
 	"github.com/angelnicolasc/flinch/internal/prove"
 	"github.com/angelnicolasc/flinch/internal/reflex"
 	"github.com/angelnicolasc/flinch/internal/runner"
+	"github.com/angelnicolasc/flinch/internal/testutil"
 )
 
 func gitCommit(t *testing.T, repo, msg string) string {
@@ -629,9 +630,7 @@ func TestGrayMatterSeed27And55EndToEnd(t *testing.T) {
 
 // TestLivePytestAndRuffVerification validates pytest and ruff integrations against real local binaries when installed.
 func TestLivePytestAndRuffVerification(t *testing.T) {
-	if _, err := exec.LookPath("pytest"); err != nil {
-		t.Skip("pytest not installed on PATH")
-	}
+	testutil.RequireTool(t, "pytest")
 	ctx := context.Background()
 	repo := t.TempDir()
 	if _, _, err := gitutil.Run(ctx, repo, nil, "init"); err != nil {
@@ -688,8 +687,10 @@ func TestLivePytestAndRuffVerification(t *testing.T) {
 		t.Fatalf("expected inconclusive/skipped_on_broken for pytest skip->pass, got %s/%s", repSkip.Verdict, repSkip.Reason)
 	}
 
-	// Verify live ruff linter proof if ruff is installed.
-	if _, err := exec.LookPath("ruff"); err == nil {
+	// The Ruff proof is its own subtest, so a missing Ruff shows up as a skip
+	// (or, with FLINCH_REQUIRE_TOOLS=1, a failure) instead of vanishing.
+	t.Run("ruff", func(t *testing.T) {
+		testutil.RequireTool(t, "ruff")
 		writeRepoFile(t, repo, "src/app.py", "def parse(raw):\n    try:\n        return int(raw)\n    except:\n        return 0\n")
 		ruffBroken := gitCommit(t, repo, "broken bare except")
 
@@ -722,5 +723,5 @@ func TestLivePytestAndRuffVerification(t *testing.T) {
 		if repRuff.Verdict != prove.VerdictVerified {
 			t.Fatalf("expected ruff E722 verified, got %s/%s (%s)", repRuff.Verdict, repRuff.Reason, repRuff.ActionableError)
 		}
-	}
+	})
 }

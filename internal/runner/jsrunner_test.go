@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/angelnicolasc/flinch/internal/testutil"
 )
 
 func TestParseJSReportJSONHandlesVitestJestSkipTodoAndLoadFailure(t *testing.T) {
@@ -128,10 +130,7 @@ func TestBuildJSTestNameRegexAndMonorepoPackageDiscovery(t *testing.T) {
 // TestLiveNodeStubVitestAndJestFileReporter verifies file-based JSON reporting (immune to noisy stdout)
 // and workspace CWD execution using the locally installed Node runtime.
 func TestLiveNodeStubVitestAndJestFileReporter(t *testing.T) {
-	nodeInfo := ProbeTool(context.Background(), []string{"node"}, "--version")
-	if !nodeInfo.Available {
-		t.Skip("node not installed on PATH")
-	}
+	testutil.RequireTool(t, "node")
 	root := t.TempDir()
 	pkgDir := filepath.Join(root, "packages", "retry")
 	binDir := filepath.Join(root, "node_modules", ".bin")

@@ -1,0 +1,33 @@
+# Integration tests that must run and pass in CI on each operating system.
+# Format: <os|all> <package> <Test[/subtest]>. The os column uses RUNNER_OS
+# (Linux, Windows). A missing, skipped, renamed or failing entry fails CI,
+# so a green run can't hide an integration that silently stopped running.
+
+# Real test runners
+all internal/author TestMissingAssertionReachesDoctorFromBothStopPaths
+all internal/author TestReuseRecognizesRealAssertionForms
+all internal/author TestRealAssertionControlsAvoidFalseProof
+all internal/author TestProductOnlyRepeatInTurnAndNativeClone
+all internal/author TestProductOnlyRepeatWithTwoAssertionsInTurnAndNativeClone
+all internal/author TestRequestedTwoAssertionCheckRunsInLaterTurnAndNativeClone
+all internal/prove TestRegressionRealJestDiscoversProofAndHonorsProjectExcludes
+all internal/runner TestLiveNodeStubVitestAndJestFileReporter
+all internal/runner TestRegressionDirtyCheckoutKeepsNativeRunnerCachesOutside
+all internal/e2e TestLivePytestAndRuffVerification
+all internal/e2e TestLivePytestAndRuffVerification/ruff
+all internal/e2e TestGrayMatterSeed27And55EndToEnd
+
+# Real linters through the production adapters
+all internal/runner TestRealGolangCILintReportsAndClears
+all internal/runner TestRealESLintReportsAndClears
+all internal/runner TestRealAstGrepReportsAndClears
+
+# The hook never answers the host with an error
+all internal/cli TestHookProcessExitsZeroAfterAPanic
+Linux internal/cli TestHookResponseObeysCallerDeadline
+Windows internal/cli TestWindowsHookWriterWithoutDeadlineReturnsOnTime
+
+# Windows shells, paths and package manager
+Windows internal/usersetup TestWindowsRegisteredHookCommands
+Windows internal/usersetup TestWindowsScoopUpgrade
+Windows internal/workspacetrust TestWindowsTrustPathSpelling

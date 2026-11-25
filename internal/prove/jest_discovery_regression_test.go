@@ -8,13 +8,11 @@ import (
 
 	"github.com/angelnicolasc/flinch/internal/gitutil"
 	"github.com/angelnicolasc/flinch/internal/reflex"
+	"github.com/angelnicolasc/flinch/internal/testutil"
 )
 
 func TestRegressionRealJestDiscoversProofAndHonorsProjectExcludes(t *testing.T) {
-	bin := os.Getenv("FLINCH_REAL_JEST")
-	if bin == "" {
-		t.Skip("FLINCH_REAL_JEST is not set")
-	}
+	bin := testutil.RequireToolEnv(t, "FLINCH_REAL_JEST")
 	deps := filepath.Dir(filepath.Dir(bin))
 	lock, err := os.ReadFile(filepath.Join(filepath.Dir(deps), "package-lock.json"))
 	if err != nil {
