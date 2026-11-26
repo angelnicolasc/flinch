@@ -41,7 +41,7 @@ type Event struct {
 	Kind         EventKind        `json:"kind"`
 	ReflexID     string           `json:"check_id,omitempty"`
 	Surface      string           `json:"surface,omitempty"`
-	DurationMS   int64            `json:"duration_ms,omitempty"`
+	DurationMS   *int64           `json:"duration_ms,omitempty"`
 	PhaseMS      map[string]int64 `json:"phase_ms,omitempty"`
 	TimeoutLimit string           `json:"timeout_limit,omitempty"`
 	Reason       string           `json:"reason,omitempty"`
@@ -112,7 +112,7 @@ func (s *Store) RecordTurn(ctx context.Context, surface string, res check.Result
 	if deferred != "" {
 		kind = EventTurnDeferred
 	}
-	_ = s.Record(Event{Kind: kind, Surface: surface, DurationMS: res.DurationMS, PhaseMS: res.PhaseMS, Reason: deferred})
+	_ = s.Record(Event{Kind: kind, Surface: surface, DurationMS: &res.DurationMS, PhaseMS: res.PhaseMS, Reason: deferred})
 	for _, sk := range res.SkippedControls {
 		if ctx.Err() != nil {
 			return
@@ -183,8 +183,8 @@ func (s *Store) Summarize(deterministicCount, probabilisticCount int, scopeLabel
 		switch ev.Kind {
 		case EventTurnChecked:
 			sum.TurnsChecked++
-			if ev.DurationMS > 0 {
-				latencies = append(latencies, ev.DurationMS)
+			if ev.DurationMS != nil && *ev.DurationMS > 0 {
+				latencies = append(latencies, *ev.DurationMS)
 			}
 		case EventTurnDeferred:
 			sum.TurnsDeferred++

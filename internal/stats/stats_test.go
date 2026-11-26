@@ -2,6 +2,8 @@ package stats
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"testing"
 
 	"github.com/angelnicolasc/flinch/internal/check"
@@ -10,7 +12,7 @@ import (
 func TestStatsPreservesDenominatorsAndExcludesPossibleRecurrencesFromEscapes(t *testing.T) {
 	store := NewStore(t.TempDir())
 	for _, ms := range []int64{100, 150, 200, 250, 900} {
-		if err := store.Record(Event{Kind: EventTurnChecked, DurationMS: ms}); err != nil {
+		if err := store.Record(Event{Kind: EventTurnChecked, DurationMS: &ms}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -46,6 +48,35 @@ func TestStatsPreservesDenominatorsAndExcludesPossibleRecurrencesFromEscapes(t *
 	}
 	if sum.SkippedChecks != 2 || sum.TestTimeoutsByLimit[check.LimitMaxTestRuntime] != 1 {
 		t.Fatalf("missing skip reason on a deferred turn: %+v", sum)
+	}
+}
+
+func TestTurnOutcomesKeepZeroDuration(t *testing.T) {
+	store := NewStore(t.TempDir())
+	store.RecordTurn(t.Context(), "codex", check.Result{
+		SkippedControls: []check.SkippedControl{{Reason: "tool unavailable"}},
+	}, "")
+	store.RecordTurn(t.Context(), "codex", check.Result{}, TurnDeadlineReached)
+	log, err := os.Open(store.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	decoder := json.NewDecoder(log)
+	for _, want := range []struct {
+		kind     EventKind
+		duration string
+	}{{EventTurnChecked, "0"}, {EventCheckSkipped, ""}, {EventTurnDeferred, "0"}} {
+		var event struct {
+			Kind     EventKind       `json:"kind"`
+			Duration json.RawMessage `json:"duration_ms"`
+		}
+		if err := decoder.Decode(&event); err != nil {
+			t.Fatal(err)
+		}
+		if event.Kind != want.kind || string(event.Duration) != want.duration {
+			t.Fatalf("got %s with duration_ms %q, want %s with %q", event.Kind, event.Duration, want.kind, want.duration)
+		}
 	}
 }
 
