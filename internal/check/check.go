@@ -1029,6 +1029,17 @@ func FormatSARIF(res Result) ([]byte, error) {
 	return json.MarshalIndent(doc, "", "  ")
 }
 
+// VerifiedCheckoutProof returns the local receipt when the protected case still
+// matches its proof. An empty ref reads the working tree. Reuse the index for
+// records in the same checkout inspection.
+func VerifiedCheckoutProof(ctx context.Context, repoRoot string, r reflex.Reflex, ref string, index *reflex.LocalProofIndex) *reflex.LocalProofReceipt {
+	proof, err := index.Verified(ctx, repoRoot, r, ref, artifactCaseIntact)
+	if err != nil || !proof.VerifiedForCheckout() {
+		return nil
+	}
+	return proof
+}
+
 // A record from the opening snapshot can participate only with a local proof
 // of that same record and protected case. A reviewed ID always owns its contract.
 func loadVerifiedCheckoutChecks(ctx context.Context, repoRoot, snapshot string, reviewed []reflex.Reflex) ([]reflex.Reflex, map[string]*reflex.LocalProofReceipt, error) {
@@ -1050,8 +1061,7 @@ func loadVerifiedCheckoutChecks(ctx context.Context, repoRoot, snapshot string, 
 		if reviewedIDs[r.ID] || !r.IsDeterministic() {
 			continue
 		}
-		proof, err := index.Verified(ctx, repoRoot, r, snapshot, artifactCaseIntact)
-		if err == nil && proof.VerifiedForCheckout() {
+		if proof := VerifiedCheckoutProof(ctx, repoRoot, r, snapshot, &index); proof != nil {
 			checks = append(checks, r)
 			proofs[r.ID] = proof
 		}

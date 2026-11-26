@@ -167,16 +167,14 @@ func Run(ctx context.Context, repoRoot string, pruneWorktrees bool) (Report, err
 	hasActiveTurn := false
 
 	hasLocalState := stateDir != "" && exists(stateDir)
+	var proofIndex reflex.LocalProofIndex
 	for _, r := range reflexes {
 		if r.IsDeterministic() {
 			rep.DeterministicReflexes++
 			if !trustedIDs[r.ID] {
 				rep.WorkingTreeOnlyChecks++
-				if hasLocalState {
-					proof, err := reflex.LocalProof(ctx, repoRoot, r, "")
-					if err == nil && proof.VerifiedForCheckout() {
-						rep.LocallyProvedChecks++
-					}
+				if hasLocalState && check.VerifiedCheckoutProof(ctx, repoRoot, r, "", &proofIndex) != nil {
+					rep.LocallyProvedChecks++
 				}
 			}
 		} else {

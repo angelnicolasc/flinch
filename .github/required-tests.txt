@@ -42,6 +42,7 @@ all internal/e2e TestCIUsesDirectCheckRecordsFromGit/archived
 
 # Doctor reads reviewed records and the clone's host event log
 all internal/cli TestDoctorReportsCheckSourcesAndLastHostTurns
+all internal/cli TestDoctorCountsLocallyProvedTestCases
 
 # Real linters through the production adapters
 all internal/runner TestRealGolangCILintReportsAndClears

@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/angelnicolasc/flinch/internal/author"
+	"github.com/angelnicolasc/flinch/internal/config"
 	"github.com/angelnicolasc/flinch/internal/gitutil"
 	"github.com/angelnicolasc/flinch/internal/reflex"
 	"github.com/angelnicolasc/flinch/internal/stats"
@@ -59,6 +61,15 @@ func TestClonePermissionCommandAndDiagnostics(t *testing.T) {
 	}
 }
 
+func doctorOutput(t *testing.T, repo string, args ...string) string {
+	t.Helper()
+	var out, stderr bytes.Buffer
+	if rc := Run(t.Context(), append([]string{"doctor", "--repo", repo}, args...), &out, &stderr); rc != 0 {
+		t.Fatalf("doctor exited %d: %s", rc, stderr.String())
+	}
+	return out.String()
+}
+
 func TestDoctorReportsCheckSourcesAndLastHostTurns(t *testing.T) {
 	isolateSetupHome(t)
 	repo := t.TempDir()
@@ -71,14 +82,6 @@ func TestDoctorReportsCheckSourcesAndLastHostTurns(t *testing.T) {
 		}
 	}
 	git("init", "-q")
-	run := func(args ...string) string {
-		t.Helper()
-		var out, stderr bytes.Buffer
-		if rc := Run(context.Background(), append([]string{"doctor", "--repo", repo}, args...), &out, &stderr); rc != 0 {
-			t.Fatalf("doctor exited %d: %s", rc, stderr.String())
-		}
-		return out.String()
-	}
 	type diagnosis struct {
 		Disk         int                  `json:"deterministic_checks"`
 		Trusted      int                  `json:"trusted_checks"`
@@ -92,7 +95,7 @@ func TestDoctorReportsCheckSourcesAndLastHostTurns(t *testing.T) {
 	}
 	checkCounts := func(disk, trusted, local, proved int) diagnosis {
 		t.Helper()
-		raw := run("--json")
+		raw := doctorOutput(t, repo, "--json")
 		var got diagnosis
 		if err := json.Unmarshal([]byte(raw), &got); err != nil {
 			t.Fatal(err)
@@ -155,7 +158,7 @@ func TestDoctorReportsCheckSourcesAndLastHostTurns(t *testing.T) {
 		mixed.Capabilities["local_capture"].State != "enabled_and_tested" || mixed.Capabilities["turn_enforcement"].State == "enabled_and_tested" {
 		t.Fatalf("incorrect host evidence or accreditation: %+v", mixed)
 	}
-	out := run()
+	out := doctorOutput(t, repo)
 	for _, want := range []string{
 		"1 in the trusted revision, 3 only in the working tree (1 locally proved)",
 		"Last claude turn checked in this clone: " + second.Format(time.RFC3339),
@@ -169,17 +172,92 @@ func TestDoctorReportsCheckSourcesAndLastHostTurns(t *testing.T) {
 		t.Fatal(err)
 	}
 	var invalid diagnosis
-	if err := json.Unmarshal([]byte(run("--json")), &invalid); err != nil {
+	if err := json.Unmarshal([]byte(doctorOutput(t, repo, "--json")), &invalid); err != nil {
 		t.Fatal(err)
 	}
 	if invalid.Trusted != 1 || !strings.Contains(invalid.TreeError, filepath.Base(reviewed)) ||
 		!invalid.Last["claude"].Equal(second) || invalid.Capabilities["local_capture"].State != "enabled_and_tested" {
 		t.Fatalf("lost diagnostics for a malformed working-tree record: %+v", invalid)
 	}
-	out = run()
+	out = doctorOutput(t, repo)
 	if !strings.Contains(out, "1 in the trusted revision") || !strings.Contains(out, "Working-tree check counts unavailable:") ||
 		strings.Contains(out, "0 only in the working tree") || strings.Contains(out, "Probabilistic context guides: 0") {
 		t.Fatalf("expected known counts and a working-tree error:\n%s", out)
+	}
+}
+
+func TestDoctorCountsLocallyProvedTestCases(t *testing.T) {
+	ctx, repo := t.Context(), t.TempDir()
+	if _, _, err := gitutil.Run(ctx, repo, nil, "init"); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, contents string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(contents), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot := func() string {
+		t.Helper()
+		ref, err := gitutil.CaptureWorkingTreeSnapshot(ctx, repo, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ref
+	}
+	const table = `package retry
+import "testing"
+
+func TestRetryDelay(t *testing.T) {
+	cases := []struct { name string; delay, want int }{
+		{"positive", 5, 5},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := RetryDelay(tc.delay); got != tc.want {
+				t.Fatalf("got %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+`
+	const row = `{"zero", 0, 0},`
+	write("go.mod", "module example.com/retry\n\ngo 1.26\n")
+	write("retry.go", "package retry\nfunc RetryDelay(d int) int { if d == 0 { return 1 }; return d }\n")
+	write("retry_test.go", table)
+	broken := snapshot()
+	fixed := strings.Replace(table, `{"positive", 5, 5},`, `{"positive", 5, 5},`+"\n\t\t"+row, 1)
+	write("retry.go", "package retry\nfunc RetryDelay(d int) int { return d }\n")
+	write("retry_test.go", fixed)
+	proof, err := author.ReuseFirst(ctx, repo, config.Default(), broken, snapshot(), 2*time.Minute)
+	if err != nil || proof.Status != author.ReuseProven || proof.Reflex == nil || proof.Reflex.Artifact.Selector != "TestRetryDelay/zero" {
+		t.Fatalf("expected a verified zero row, got %+v, err=%v", proof, err)
+	}
+	isolateSetupHome(t)
+	withSibling := strings.Replace(fixed, row, row+"\n\t\t"+`{"another_positive", 7, 7},`, 1)
+	for _, tc := range []struct {
+		name, contents string
+		proved         int
+	}{
+		{"as_proved", fixed, 1},
+		{"sibling_added", withSibling, 1},
+		{"protected_row_edited", strings.Replace(withSibling, row, `{"zero", 0, 1},`, 1), 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			write("retry_test.go", tc.contents)
+			want := "0 in the trusted revision, 1 only in the working tree (" + strconv.Itoa(tc.proved) + " locally proved)"
+			if out := doctorOutput(t, repo); !strings.Contains(out, want) {
+				t.Errorf("expected %q in doctor output:\n%s", want, out)
+			}
+			var got struct {
+				Local  int `json:"working_tree_only_checks"`
+				Proved int `json:"locally_proved_working_tree_checks"`
+			}
+			raw := doctorOutput(t, repo, "--json")
+			if err := json.Unmarshal([]byte(raw), &got); err != nil || got.Local != 1 || got.Proved != tc.proved {
+				t.Errorf("expected one checkout check and %d locally proved in doctor JSON: %s (%v)", tc.proved, raw, err)
+			}
+		})
 	}
 }
 
