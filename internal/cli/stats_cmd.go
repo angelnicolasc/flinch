@@ -5,6 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
 
 	"github.com/angelnicolasc/flinch/internal/gitutil"
 	"github.com/angelnicolasc/flinch/internal/reflex"
@@ -56,10 +58,17 @@ func runStats(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	fmt.Fprintf(stdout, "Scope: %s\n", sum.ObservedScope)
 	fmt.Fprintf(stdout, "Protections: %d deterministic, %d probabilistic guides\n", sum.DeterministicReflexes, sum.ProbabilisticGuides)
 	fmt.Fprintf(stdout, "Turns checked: %d (p95 latency: %dms)\n", sum.TurnsChecked, sum.TurnLatencyP95MS)
+	fmt.Fprintf(stdout, "Turns deferred: %d (turn deadline: %d, enforcement failed: %d)\n", sum.TurnsDeferred, sum.TurnDeadlineDeferrals, sum.TurnsDeferred-sum.TurnDeadlineDeferrals)
+	if sum.VerdictFraction != nil {
+		fmt.Fprintf(stdout, "Turns with a verdict: %d/%d (%.1f%%)\n", sum.TurnsChecked, sum.TurnsChecked+sum.TurnsDeferred, *sum.VerdictFraction*100)
+	}
 	fmt.Fprintf(stdout, "Interceptions: turn=%d  ci=%d\n", sum.TurnInterceptions, sum.CIInterceptions)
 	fmt.Fprintf(stdout, "Escapes: confirmed=%d  unexposed_surface=%d  possible_recurrences=%d (excluded from escape rate)\n",
 		sum.ConfirmedEscapes, sum.UnexposedSurfaceEvents, sum.PossibleRecurrences)
 	fmt.Fprintf(stdout, "Skipped checks: %d\n", sum.SkippedChecks)
+	for _, limit := range slices.Sorted(maps.Keys(sum.TestTimeoutsByLimit)) {
+		fmt.Fprintf(stdout, "Tests stopped at %s: %d\n", limit, sum.TestTimeoutsByLimit[limit])
+	}
 	if sum.EscapeRatePer100Checked != nil {
 		fmt.Fprintf(stdout, "Confirmed escapes per 100 checked turns: %.2f (%d/%d)\n",
 			*sum.EscapeRatePer100Checked, sum.ConfirmedEscapes, sum.TurnsChecked)

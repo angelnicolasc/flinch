@@ -44,6 +44,7 @@ type FindingWithReflex struct {
 type SkippedControl struct {
 	ReflexID              string `json:"check_id"`
 	Reason                string `json:"reason"`
+	TimeoutLimit          string `json:"timeout_limit,omitempty"`
 	CommandApprovalDigest string `json:"-"`
 }
 
@@ -62,6 +63,7 @@ type Result struct {
 	ContinuationsUsed   int                  `json:"continuations_used,omitempty"`
 	ContinuationsLimit  int                  `json:"continuations_limit,omitempty"`
 	DurationMS          int64                `json:"duration_ms"`
+	PhaseMS             map[string]int64     `json:"phase_ms,omitempty"`
 	DiagnosticMessage   string               `json:"diagnostic_message,omitempty"`
 }
 
@@ -94,7 +96,7 @@ type AccreditOptions struct {
 // RunTurn evaluates reviewed and locally verified checks over changes made during the current turn,
 // applying baseline occurrence diffing, integrity checks, a single unified deadline
 // covering startup through completion, and shared continuation/test budgets.
-func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnOptions) (Result, error) {
+func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnOptions) (res Result, err error) {
 	ctx = runner.WithCommandRepository(ctx, repoRoot)
 	start := time.Now()
 	if opts.SessionID == "" {
@@ -108,7 +110,7 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 		deadline = cfg.LoopDeadline()
 	}
 
-	res := Result{
+	res = Result{
 		Schema:             1,
 		Surface:            "turn",
 		Decision:           DecisionAllow,
@@ -133,6 +135,9 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 		return expiredRes, nil
 	}
 
+	phases := turnPhases{elapsed: make(map[string]time.Duration)}
+	defer func() { res.PhaseMS = phases.milliseconds() }()
+	phases.start("load")
 	stateDir, err := gitutil.FlinchStateDir(tctx, repoRoot)
 	if err != nil {
 		if expiredRes, expired := failOpenIfExpired(); expired {
@@ -213,6 +218,7 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 		checkIntegrity(cfg.Executor.TrustedRef, reviewed)
 		checkIntegrity(cp.SnapshotSHA, checkout)
 	}
+	phases.finish()
 
 	// Compare against the checkout as it was when the human turn opened.
 	baselineRef := ""
@@ -233,7 +239,9 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 		if baselineRef == "" {
 			return nil, fmt.Errorf("no baseline ref available")
 		}
+		phases.start("baseline_tree")
 		wt, wtErr := gitutil.CreateWorktree(tctx, repoRoot, baselineRef, "turn-base-")
+		phases.finish()
 		if wtErr != nil {
 			return nil, wtErr
 		}
@@ -250,6 +258,26 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 		testBudgetDur = 20 * time.Second
 	}
 	testBudgetDirty := false
+	budgets := turnTestBudgets{deadline: deadline, testBudget: testBudgetDur, maxRuntime: maxTestDur}
+	nextTestLimit := func() turnTestLimit {
+		return budgets.limit(time.Until(deadlineTime(tctx, deadline)), testBudgetDur-time.Duration(cp.TestBudgetUsedMS)*time.Millisecond)
+	}
+	runTest := func(r reflex.Reflex, dir, phase string, limit turnTestLimit) (runner.TestRunResult, SkippedControl, time.Duration) {
+		if limit.remaining <= 0 {
+			reason := "turn deadline reached before test execution; deferred to CI"
+			if limit.kind == LimitTestBudget {
+				reason = "logical turn test budget exhausted before test execution; deferred to CI"
+			}
+			return runner.TestRunResult{}, SkippedControl{ReflexID: r.ID, Reason: reason}, 0
+		}
+		phases.start(phase)
+		tr, reason := runTestReflexRaw(tctx, repoRoot, dir, r, limit.remaining)
+		elapsed := phases.finish()
+		if tr.TimedOut {
+			return tr, limit.stopped(r.ID), elapsed
+		}
+		return tr, SkippedControl{ReflexID: r.ID, Reason: reason}, elapsed
+	}
 
 	for _, r := range append(reviewed, checkout...) {
 		if errors.Is(tctx.Err(), context.DeadlineExceeded) {
@@ -289,7 +317,9 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 			if localProof != nil {
 				artifactRef = cp.SnapshotSHA
 			} else {
+				phases.start("load")
 				localProof, err = reflex.LocalProof(tctx, repoRoot, r, "")
+				phases.finish()
 				if err != nil {
 					res.SkippedControls = append(res.SkippedControls, SkippedControl{ReflexID: r.ID, Reason: "could not read local test measurement"})
 					continue
@@ -310,43 +340,43 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 				})
 				continue
 			}
-			runCap := min(remaining, remTestBudget, maxTestDur)
 			// A fresh clone has the reviewed record but no local timing. Charge a
 			// bounded run at the checkpoint and reuse its result for comparison.
 			var measuredBaseline *runner.TestRunResult
 			if localProof == nil || localProof.RuntimeMS <= 0 {
 				wt, err := ensureBaselineWT()
 				if err != nil {
+					res.SkippedControls = append(res.SkippedControls, SkippedControl{ReflexID: r.ID, Reason: fmt.Sprintf("baseline unavailable for test calibration (%v); failing open", err)})
 					continue
 				}
-				measuredAt := time.Now()
-				calibration, skip := runTestReflexRaw(tctx, repoRoot, wt.Path, r, runCap)
-				elapsed := max(time.Since(measuredAt).Milliseconds(), int64(1))
-				cp.TestBudgetUsedMS += elapsed
-				testBudgetDirty = true
+				calibration, skip, runtime := runTest(r, wt.Path, "baseline_test", nextTestLimit())
+				elapsed := max(runtime.Milliseconds(), int64(1))
+				if runtime > 0 {
+					cp.TestBudgetUsedMS += elapsed
+					testBudgetDirty = true
+				}
+				if skip.Reason != "" {
+					res.SkippedControls = append(res.SkippedControls, skip)
+					continue
+				}
 				cases := prove.SelectedCases(calibration.Cases, r.Artifact.Selector)
-				if skip != "" || calibration.ExitCode != 0 || len(cases) != 1 || cases[0].Outcome != runner.OutcomePass || time.Duration(elapsed)*time.Millisecond > maxTestDur {
+				if calibration.ExitCode != 0 || len(cases) != 1 || cases[0].Outcome != runner.OutcomePass || time.Duration(elapsed)*time.Millisecond > maxTestDur {
 					res.SkippedControls = append(res.SkippedControls, SkippedControl{ReflexID: r.ID, Reason: "no qualifying fast pass at the turn checkpoint"})
 					continue
 				}
 				if err := reflex.SaveLocalTiming(tctx, repoRoot, r, elapsed, artifactRef); err != nil {
+					res.SkippedControls = append(res.SkippedControls, SkippedControl{ReflexID: r.ID, Reason: "could not save local test measurement"})
 					continue
 				}
 				measuredBaseline = &calibration
-				runCap = min(maxTestDur, time.Until(deadlineTime(tctx, deadline)), testBudgetDur-time.Duration(cp.TestBudgetUsedMS)*time.Millisecond)
-				if runCap <= 0 {
-					continue
-				}
 			}
-			testStart := time.Now()
-			currResult, skipReason := runTestReflexRaw(tctx, repoRoot, repoRoot, r, runCap)
-			elapsedTest := time.Since(testStart).Milliseconds()
-			if hasCP {
-				cp.TestBudgetUsedMS += elapsedTest
+			currResult, skip, runtime := runTest(r, repoRoot, "test", nextTestLimit())
+			if hasCP && runtime > 0 {
+				cp.TestBudgetUsedMS += runtime.Milliseconds()
 				testBudgetDirty = true
 			}
-			if skipReason != "" {
-				res.SkippedControls = append(res.SkippedControls, SkippedControl{ReflexID: r.ID, Reason: skipReason})
+			if skip.Reason != "" {
+				res.SkippedControls = append(res.SkippedControls, skip)
 				continue
 			}
 			currFailing := failingTestCases(currResult, r.Artifact.Selector)
@@ -363,36 +393,34 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 				})
 				continue
 			}
-			remAfterCurr := time.Until(deadlineTime(tctx, deadline))
-			remTestAfterCurr := testBudgetDur - time.Duration(cp.TestBudgetUsedMS)*time.Millisecond
-			if remTestAfterCurr < remAfterCurr {
-				remAfterCurr = remTestAfterCurr
-			}
-			if remAfterCurr <= 0 {
+			baseLimit := nextTestLimit()
+			if baseLimit.remaining <= 0 {
+				reason := "test budget exhausted before baseline comparison; failing open"
+				if baseLimit.kind == LimitTurnDeadline {
+					reason = "turn deadline reached before baseline comparison; failing open"
+				}
 				res.SkippedControls = append(res.SkippedControls, SkippedControl{
 					ReflexID: r.ID,
-					Reason:   "test budget exhausted before baseline comparison; failing open",
+					Reason:   reason,
 				})
 				continue
 			}
-			baseStart := time.Now()
 			var baseResult runner.TestRunResult
-			var baseSkip string
 			if measuredBaseline != nil {
 				baseResult = *measuredBaseline
 			} else {
-				baseResult, baseSkip = runTestReflexRaw(tctx, repoRoot, wt.Path, r, min(remAfterCurr, maxTestDur))
-			}
-			if hasCP && measuredBaseline == nil {
-				cp.TestBudgetUsedMS += time.Since(baseStart).Milliseconds()
-				testBudgetDirty = true
-			}
-			if baseSkip != "" {
-				res.SkippedControls = append(res.SkippedControls, SkippedControl{
-					ReflexID: r.ID,
-					Reason:   fmt.Sprintf("baseline test run inconclusive (%s); failing open", baseSkip),
-				})
-				continue
+				baseResult, skip, runtime = runTest(r, wt.Path, "baseline_test", baseLimit)
+				if hasCP {
+					cp.TestBudgetUsedMS += runtime.Milliseconds()
+					testBudgetDirty = true
+				}
+				if skip.Reason != "" {
+					if skip.TimeoutLimit == "" {
+						skip.Reason = fmt.Sprintf("baseline test run inconclusive (%s); failing open", skip.Reason)
+					}
+					res.SkippedControls = append(res.SkippedControls, skip)
+					continue
+				}
 			}
 
 			baseOutcomeByName := make(map[string]runner.TestOutcome, len(baseResult.Cases))
@@ -424,7 +452,9 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 				})
 			}
 		case reflex.RungLint, reflex.RungStructure, reflex.RungGuard:
+			phases.start("test")
 			currRun, runErr := runner.RunArtifact(tctx, repoRoot, r.Artifact, targetArgForTool(r.Artifact.Tool, matchedFiles), remaining)
+			phases.finish()
 			if runErr != nil {
 				reason := fmt.Sprintf("tool unavailable or failed to launch: %v", runErr)
 				switch {
@@ -466,7 +496,9 @@ func RunTurn(ctx context.Context, repoRoot string, cfg config.Config, opts TurnO
 					})
 					continue
 				}
+				phases.start("baseline_test")
 				baseRun, baseErr := runner.RunArtifact(tctx, wt.Path, r.Artifact, targetArgForTool(r.Artifact.Tool, baseTargets), baseRem)
+				phases.finish()
 				if baseErr != nil || baseRun.TimedOut || (baseRun.ExitCode != 0 && len(baseRun.Findings) == 0) {
 					reason := "baseline comparison failed or timed out; failing open so pre-existing debt cannot block"
 					if errors.Is(baseErr, runner.ErrCommandApproval) {
@@ -1137,7 +1169,7 @@ func runTestReflexRaw(ctx context.Context, repoRoot, rootDir string, r reflex.Re
 		return runner.TestRunResult{}, fmt.Sprintf("test runner failed: %v", err)
 	}
 	if tr.TimedOut {
-		return runner.TestRunResult{}, "test timed out; deferred to CI"
+		return tr, "test timed out; deferred to CI"
 	}
 	if tr.CompileOnly {
 		return runner.TestRunResult{}, "package failed to compile; deferred to build/CI"

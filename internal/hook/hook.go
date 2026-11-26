@@ -346,9 +346,12 @@ func handleStop(
 		return allowResp
 	}
 
-	// Capture post-turn state cleanly without creating Git refs.
+	st := stats.NewStore(stateDir)
+	snapshotStart := time.Now()
 	currEndSnap, err := gitutil.CaptureWorkingTreeSnapshot(ctx, repoRoot, "flinch post-turn snapshot")
+	snapshotMS := time.Since(snapshotStart).Milliseconds()
 	if err != nil || ctx.Err() != nil {
+		st.RecordTurn(ctx, string(host), check.Result{DurationMS: snapshotMS, PhaseMS: map[string]int64{"snapshot": snapshotMS}}, stats.EnforcementFailed)
 		return allowResp
 	}
 
@@ -360,19 +363,28 @@ func handleStop(
 		WorktreeID: repoRoot,
 		CheckIntg:  true,
 	})
-	timedOut := enforcement.Err() != nil
+	deferred := ""
+	switch {
+	case enforcement.Err() == context.DeadlineExceeded || turnRes.Decision == check.DecisionAllowTimeout:
+		deferred = stats.TurnDeadlineReached
+	case err != nil || enforcement.Err() != nil:
+		deferred = stats.EnforcementFailed
+	}
 	cancel()
-	if err != nil || timedOut || ctx.Err() != nil || turnRes.Decision == check.DecisionAllowTimeout {
+	if turnRes.PhaseMS == nil {
+		turnRes.PhaseMS = make(map[string]int64)
+	}
+	turnRes.PhaseMS["snapshot"] = snapshotMS
+	turnRes.DurationMS = time.Since(snapshotStart).Milliseconds()
+	st.RecordTurn(ctx, string(host), turnRes, deferred)
+	if deferred != "" || ctx.Err() != nil {
 		return allowResp
 	}
 
-	st := stats.NewStore(stateDir)
-	_ = st.Record(stats.Event{Kind: stats.EventTurnChecked, Surface: string(host), DurationMS: turnRes.DurationMS})
 	for _, sk := range turnRes.SkippedControls {
 		if sk.CommandApprovalDigest != "" {
 			approvalDigests = append(approvalDigests, sk.CommandApprovalDigest)
 		}
-		_ = st.Record(stats.Event{Kind: stats.EventCheckSkipped, ReflexID: sk.ReflexID, Surface: string(host), Reason: sk.Reason})
 	}
 	// Reload checkpoint (RunTurn may have updated TestBudgetUsedMS / TotalContinuations).
 	cp, hasCP, err = check.LoadCheckpoint(stateDir, sessionID, repoRoot)

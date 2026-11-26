@@ -110,12 +110,13 @@ func runCheck(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	if stateDir, sdErr := gitutil.FlinchStateDir(ctx, root); sdErr == nil {
 		st := stats.NewStore(stateDir)
 		if res.Surface == "turn" {
-			_ = st.Record(stats.Event{Kind: stats.EventTurnChecked, Surface: "turn", DurationMS: res.DurationMS})
+			deferred := ""
+			if res.Decision == check.DecisionAllowTimeout {
+				deferred = stats.TurnDeadlineReached
+			}
+			st.RecordTurn(ctx, "turn", res, deferred)
 			if res.Blocking {
 				_ = st.Record(stats.Event{Kind: stats.EventTurnIntercepted, Surface: "turn"})
-			}
-			for _, sk := range res.SkippedControls {
-				_ = st.Record(stats.Event{Kind: stats.EventCheckSkipped, ReflexID: sk.ReflexID, Surface: "turn", Reason: sk.Reason})
 			}
 		} else if res.Blocking {
 			_ = st.Record(stats.Event{Kind: stats.EventCIIntercepted, Surface: "ci"})

@@ -28,6 +28,10 @@ Test time is charged to the human turn across its continuations: 20 seconds per 
 
 The agent's turn simply finishes in three cases: Flinch cannot attribute a finding to this turn, cannot save its state or runs out of time. A lock serializes callbacks that share a checkpoint. Each processed Stop leaves a receipt, so a duplicate delivery never requests the same repair twice or repeats a success message. Anything deferred still runs wherever the team runs its native tests.
 
+When a Stop reaches enforcement, the clone's event log records a checked turn or a deferred turn. A deferral identifies an expired turn deadline or an enforcement error. Test timeouts identify the limiting budget. The outcome records milliseconds spent in each phase that ran, including the snapshot, check loading, current test, baseline tree preparation and baseline test. An exhausted host budget takes priority over writing the log.
+
+`flinch stats` reports how many recorded turns reached a verdict and how many were deferred. Checked-turn latency and confirmed escapes per 100 checked turns use the checked turns as before. Stop duration now includes the post-turn snapshot. Older logs measure enforcement after that snapshot and omit turns that expired before a verdict.
+
 ## In the code
 
 - [`internal/cli/hook_cmd.go`](../../internal/cli/hook_cmd.go): `runHook` starts the clock and bounds input and output.

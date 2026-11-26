@@ -344,6 +344,14 @@ func TestTurnCheckFailsOpenWhenBaselineComparisonFails(t *testing.T) {
 	if len(res.SkippedControls) == 0 {
 		t.Fatalf("expected skipped control recording baseline failure")
 	}
+	for _, phase := range []string{"load", "test", "baseline_tree"} {
+		if _, ok := res.PhaseMS[phase]; !ok {
+			t.Errorf("missing %s duration: %v", phase, res.PhaseMS)
+		}
+	}
+	if _, ok := res.PhaseMS["baseline_test"]; ok {
+		t.Errorf("recorded a scan without a baseline tree: %v", res.PhaseMS)
+	}
 }
 
 // Regression test: A test reflex that was already failing at checkpoint never blocks;
@@ -423,6 +431,11 @@ func TestTurnCheckPreExistingFailingTestDoesNotBlock(t *testing.T) {
 	if !resReg.Blocking || len(resReg.Findings) != 1 {
 		t.Fatalf("newly broken test MUST block turn, got %+v", resReg)
 	}
+	for _, phase := range []string{"load", "test", "baseline_tree", "baseline_test"} {
+		if _, ok := resReg.PhaseMS[phase]; !ok {
+			t.Errorf("missing %s duration: %v", phase, resReg.PhaseMS)
+		}
+	}
 }
 
 // Regression test: The unified deadline covers startup and fails open on expiration.
@@ -443,8 +456,28 @@ func TestTurnCheckDeadlineCoversStartup(t *testing.T) {
 	}
 }
 
+func TestTurnTimeoutIdentifiesTheLimitingBudget(t *testing.T) {
+	budgets := turnTestBudgets{deadline: 10 * time.Second, testBudget: 20 * time.Second, maxRuntime: 5 * time.Second}
+	for _, tc := range []struct {
+		turnLeft, budgetLeft, wantCap time.Duration
+		wantLimit, wantReason         string
+	}{
+		{9 * time.Second, 18 * time.Second, 5 * time.Second, LimitMaxTestRuntime, "test stopped at max_test_runtime (5s); deferred to CI"},
+		{3 * time.Second, 8 * time.Second, 3 * time.Second, LimitTurnDeadline, "test stopped at the turn deadline (10s); deferred to CI"},
+		{7 * time.Second, time.Second, time.Second, LimitTestBudget, "test stopped at the logical test budget (20s); deferred to CI"},
+	} {
+		t.Run(tc.wantLimit, func(t *testing.T) {
+			limit := budgets.limit(tc.turnLeft, tc.budgetLeft)
+			skip := limit.stopped("retry")
+			if limit.remaining != tc.wantCap || skip.ReflexID != "retry" || skip.TimeoutLimit != tc.wantLimit || skip.Reason != tc.wantReason {
+				t.Fatalf("got cap %s and skip %+v", limit.remaining, skip)
+			}
+		})
+	}
+}
+
 // Regression test: The 20s per-turn test budget persists across continuations and does not reset.
-func TestTurnCheckLogicalTurnTestBudgetPersistsAcrossContinuations(t *testing.T) {
+func TestTurnCheckEnforcesLogicalAndPerTestBudgets(t *testing.T) {
 	repo := t.TempDir()
 	ctx := context.Background()
 	if _, _, err := gitutil.Run(ctx, repo, nil, "init"); err != nil {
@@ -464,15 +497,15 @@ func TestTurnCheckLogicalTurnTestBudgetPersistsAcrossContinuations(t *testing.T)
 	if err := os.WriteFile(filepath.Join(repo, "a_test.go"), []byte("package a\nimport \"testing\"\nfunc TestV(t *testing.T) { if V() != 1 { t.Fatal() } }\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := reflex.Save(repo, reflex.Reflex{
+	r := reflex.Reflex{
 		ID:         "r-v",
 		Version:    1,
 		Scope:      "*.go",
 		Rung:       reflex.RungTest,
 		Obligation: "V returns 1.",
 		Artifact:   reflex.Artifact{Tool: "go-test", Path: "a_test.go", Selector: "TestV"},
-		Proof:      &reflex.ProofSummary{Verdict: "verified", RuntimeMS: 50},
-	}); err != nil {
+	}
+	if _, err := reflex.Save(repo, r); err != nil {
 		t.Fatal(err)
 	}
 	commitRepo(t, repo, "init")
@@ -499,6 +532,45 @@ func TestTurnCheckLogicalTurnTestBudgetPersistsAcrossContinuations(t *testing.T)
 	}
 	if res.Blocking || len(res.SkippedControls) == 0 || !strings.Contains(res.SkippedControls[0].Reason, "budget exhausted") {
 		t.Fatalf("expected skipped test reflex due to exhausted logical turn budget, got %+v", res)
+	}
+	if _, ok := res.PhaseMS["load"]; !ok || len(res.PhaseMS) != 1 || res.SkippedControls[0].TimeoutLimit != "" {
+		t.Fatalf("a test skipped before execution recorded a run: %+v", res)
+	}
+
+	// A fresh budget permits calibration, which now reaches the per-test timeout.
+	cp.TestBudgetUsedMS = 0
+	if err := SaveCheckpoint(stateDir, cp); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Loop.MaxTestRuntime = "1ns"
+	res, err = RunTurn(ctx, repo, cfg, TurnOptions{SessionID: "sess-bud", WorktreeID: repo, Deadline: 30 * time.Second})
+	if err != nil || res.Blocking || len(res.SkippedControls) != 1 || res.SkippedControls[0].TimeoutLimit != LimitMaxTestRuntime {
+		t.Fatalf("missing calibration timeout: %+v, err=%v", res, err)
+	}
+	_, calibrated := res.PhaseMS["baseline_test"]
+	_, checkedCurrent := res.PhaseMS["test"]
+	if !calibrated || checkedCurrent {
+		t.Errorf("calibration timed out before current test ran: %v", res.PhaseMS)
+	}
+
+	// With a local timing receipt, the same check goes directly to the current
+	// test. Its shared logical budget can stop it before max_test_runtime.
+	if err := SaveCheckpoint(stateDir, cp); err != nil {
+		t.Fatal(err)
+	}
+	if err := reflex.SaveLocalTiming(ctx, repo, r, 1, ""); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Loop.MaxTestRuntime = "5s"
+	cfg.Loop.TestBudget = "1ns"
+	res, err = RunTurn(ctx, repo, cfg, TurnOptions{SessionID: "sess-bud", WorktreeID: repo, Deadline: 30 * time.Second})
+	if err != nil || res.Blocking || len(res.SkippedControls) != 1 || res.SkippedControls[0].TimeoutLimit != LimitTestBudget {
+		t.Fatalf("missing current-test timeout: %+v, err=%v", res, err)
+	}
+	_, checkedCurrent = res.PhaseMS["test"]
+	_, calibrated = res.PhaseMS["baseline_test"]
+	if !checkedCurrent || calibrated {
+		t.Errorf("current test timed out before baseline comparison: %v", res.PhaseMS)
 	}
 }
 
