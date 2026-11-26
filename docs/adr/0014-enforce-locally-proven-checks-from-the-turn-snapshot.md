@@ -20,4 +20,4 @@ The local receipt records the revision used to verify the artifact. The local pr
 
 The next turn can detect a regression or a change to the protected case before the developer commits. Discarding the uncommitted record before submitting a prompt removes it from that turn's snapshot. A linked worktree needs the matching record and artifact in its own snapshot to use the proof.
 
-A checkout-only proof affects interactive turns. Committing the record, test and fix makes the check available to other clones and CI through the repository.
+A checkout-only proof affects interactive turns. If the test file has changed and Git has pruned the verified revision, Flinch can no longer apply the uncommitted check from that proof. Committing the record, test and fix makes the check available to other clones and CI through the repository.
