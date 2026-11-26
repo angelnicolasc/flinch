@@ -15,6 +15,7 @@ import (
 
 type checkout struct {
 	cwd, root, common string
+	worktreeGitDir    string // Original gitdir spelling used by Codex for the linked main checkout.
 }
 
 // Resolve Git metadata without invoking Git, loading a repository's configuration,
@@ -40,7 +41,7 @@ func findCheckout(ctx context.Context, path string) (checkout, error) {
 		marker := filepath.Join(dir, ".git")
 		info, err := os.Lstat(marker)
 		if err == nil {
-			var common string
+			var common, worktreeDir string
 			switch {
 			case info.IsDir():
 				if !validCommon(marker) {
@@ -48,7 +49,10 @@ func findCheckout(ctx context.Context, path string) (checkout, error) {
 				}
 				common = marker
 			case info.Mode().IsRegular():
-				common, err = linkedCommon(marker)
+				worktreeDir, err = readWorktreeGitDir(marker)
+				if err == nil {
+					common, err = linkedCommon(marker, worktreeDir)
+				}
 				if err != nil {
 					return c, err
 				}
@@ -58,7 +62,7 @@ func findCheckout(ctx context.Context, path string) (checkout, error) {
 			if within(common, cwd) || insideGitMetadata(cwd, dir) {
 				return c, errors.New("the host working directory is inside Git metadata")
 			}
-			return checkout{cwd: cwd, root: dir, common: common}, nil
+			return checkout{cwd: cwd, root: dir, common: common, worktreeGitDir: worktreeDir}, nil
 		}
 		if !errors.Is(err, os.ErrNotExist) {
 			return c, err
@@ -126,17 +130,25 @@ func isDir(path string) bool {
 	return err == nil && info.IsDir()
 }
 
-func linkedCommon(marker string) (string, error) {
-	invalid := errors.New("Git did not identify a registered linked worktree")
+// Codex uses Rust's byte-slice trim_ascii on Git metadata. Other whitespace
+// can be part of a directory name and must retain its filesystem identity.
+const gitPointerWhitespace = " \t\n\f\r"
+
+func readWorktreeGitDir(marker string) (string, error) {
 	data, err := readRegular(marker, 65536)
 	if err != nil {
-		return "", invalid
+		return "", err
 	}
-	value, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir: ")
-	if !ok {
-		return "", invalid
+	value, ok := strings.CutPrefix(strings.Trim(string(data), gitPointerWhitespace), "gitdir: ")
+	if !ok || value == "" || strings.ContainsAny(value, "\n\r\x00") {
+		return "", errors.New("invalid worktree Git directory")
 	}
-	admin, err := resolveMetadataPath(filepath.Dir(marker), value)
+	return value, nil
+}
+
+func linkedCommon(marker, worktreeDir string) (string, error) {
+	invalid := errors.New("Git did not identify a registered linked worktree")
+	admin, err := resolveMetadataPath(filepath.Dir(marker), worktreeDir)
 	if err != nil || filepath.Base(filepath.Dir(admin)) != "worktrees" {
 		return "", invalid
 	}
@@ -148,16 +160,20 @@ func linkedCommon(marker string) (string, error) {
 	if err != nil {
 		return "", invalid
 	}
-	common, err := resolveMetadataPath(admin, strings.TrimSpace(string(commonBytes)))
-	if err != nil || !samePath(common, expected) {
+	common, err := resolveMetadataPath(admin, strings.Trim(string(commonBytes), gitPointerWhitespace))
+	if err != nil || !samePath(common, expected) || !sameDirectory(common, expected) {
 		return "", invalid
 	}
 	back, err := readRegular(filepath.Join(admin, "gitdir"), 65536)
 	if err != nil {
 		return "", invalid
 	}
-	target, err := resolveMetadataPath(admin, strings.TrimSpace(string(back)))
-	if err != nil || !samePath(target, marker) {
+	target := strings.Trim(string(back), gitPointerWhitespace)
+	if filepath.Base(target) != ".git" || strings.ContainsAny(target, "\n\r\x00") {
+		return "", invalid
+	}
+	registered, err := resolveMetadataPath(admin, filepath.Dir(target))
+	if err != nil || !samePath(registered, filepath.Dir(marker)) || !sameDirectory(registered, filepath.Dir(marker)) {
 		return "", invalid
 	}
 	return common, nil

@@ -288,34 +288,36 @@ func TestDoctorReportsCodexSubdirectoryAndOutsideGit(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(os.Getenv("CODEX_HOME"), "config.toml"), []byte("[projects."+strconv.Quote(key)+"]\ntrust_level=\"trusted\"\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	for _, tc := range []struct{ dir, status string }{{sub, "inactive"}, {root, "active"}} {
-		t.Chdir(tc.dir)
+	for _, dir := range []string{sub, root} {
+		t.Chdir(dir)
 		var out, errs bytes.Buffer
 		if code := Run(context.Background(), []string{"setup", "--plan", "--host", "codex"}, &out, &errs); code != 0 {
 			t.Fatalf("plan: %s", errs.String())
 		}
-		var diagnostic string
-		for _, line := range strings.Split(out.String(), "\n") {
-			lower := strings.ToLower(line)
-			if strings.Contains(lower, "codex") && strings.Contains(lower, "after setup") {
-				diagnostic = lower
-				break
-			}
-		}
-		if !strings.Contains(diagnostic, "after setup: "+tc.status+" (") || tc.dir == sub && !strings.Contains(diagnostic, "trusted repository root") {
+		if !strings.Contains(out.String(), "Codex CLI and Desktop here after setup: active (") {
 			t.Fatalf("missing current-directory diagnosis: %s", out.String())
 		}
 	}
+	var out, errs bytes.Buffer
+	if code := Run(context.Background(), []string{"setup", "--host", "codex", "--yes"}, &out, &errs); code != 0 {
+		t.Fatalf("setup: %s", errs.String())
+	}
 	for _, dir := range []string{sub, home} {
-		var out, errors bytes.Buffer
-		if code := Run(context.Background(), []string{"doctor", "--all", "--repo", dir}, &out, &errors); code != 0 {
-			t.Fatalf("doctor: %s", errors.String())
+		out.Reset()
+		if code := Run(context.Background(), []string{"doctor", "--json", "--repo", dir}, &out, &errs); code != 0 {
+			t.Fatalf("doctor: %s", errs.String())
 		}
-		if msg := out.String(); !strings.Contains(msg, "codex") || !strings.Contains(msg, "inactive") {
-			t.Fatalf("missing hook status: %s", msg)
+		type hostStatus struct {
+			Host   string
+			Active bool
 		}
-		if dir == sub && !strings.Contains(strings.ToLower(out.String()), "repository root") {
-			t.Fatalf("missing actionable subdirectory reason: %s", out.String())
+		var report struct{ Hosts []hostStatus }
+		if err := json.Unmarshal(out.Bytes(), &report); err != nil {
+			t.Fatal(err)
+		}
+		index := slices.IndexFunc(report.Hosts, func(h hostStatus) bool { return h.Host == "codex" })
+		if index < 0 || report.Hosts[index].Active != (dir == sub) {
+			t.Fatalf("unexpected Codex status in %s: %s", dir, out.String())
 		}
 	}
 }

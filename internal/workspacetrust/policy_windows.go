@@ -1,6 +1,7 @@
 package workspacetrust
 
 import (
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/sys/windows"
@@ -30,4 +31,12 @@ func requirementsOverride() (string, error) {
 	}
 	paths, _, err := key.GetStringsValue("RequirementsPath")
 	return strings.Join(paths, "\x00"), err
+}
+
+func systemCodexConfigPath() string {
+	base, err := windows.KnownFolderPath(windows.FOLDERID_ProgramData, 0)
+	if err != nil {
+		base = `C:\ProgramData`
+	}
+	return filepath.Join(base, "OpenAI", "Codex", "config.toml")
 }

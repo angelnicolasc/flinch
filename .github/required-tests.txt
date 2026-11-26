@@ -76,6 +76,10 @@ all internal/cli TestHookProcessExitsZeroAfterAPanic
 Linux internal/cli TestHookResponseObeysCallerDeadline
 Windows internal/cli TestWindowsHookWriterWithoutDeadlineReturnsOnTime
 
+# Saved Codex trust in registered worktrees
+all internal/workspacetrust TestCodexLinkedWorkspaceDecisions
+all internal/workspacetrust TestCodexInheritedGrantChecksEnclosingProjectLayers
+
 # Windows shells, paths and package manager
 Windows internal/usersetup TestWindowsRegisteredHookCommands
 Windows internal/usersetup TestWindowsScoopUpgrade

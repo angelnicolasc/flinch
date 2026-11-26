@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf16"
@@ -35,13 +36,48 @@ func (t *codexTrustLevel) UnmarshalText(value []byte) error {
 type codexProjects map[string]codexProject
 
 type codexLayer struct {
-	Projects codexProjects `toml:"projects"`
+	Projects           codexProjects `toml:"projects"`
+	ProjectRootMarkers []string      `toml:"project_root_markers"`
 }
 
 type codexUser struct {
-	Projects codexProjects         `toml:"projects"`
+	codexLayer
 	Profile  string                `toml:"profile"`
 	Profiles map[string]codexLayer `toml:"profiles"`
+}
+
+// Rust matches configuration field names exactly. The Go decoder also matches
+// struct tags case-insensitively, so reject ambiguous trust fields before using
+// the result. Directory keys and profile names keep their original spelling.
+func decodeCodexTrust(data []byte, target any) error {
+	meta, err := toml.NewDecoder(bytes.NewReader(data)).Decode(target)
+	if err != nil {
+		return err
+	}
+	wrongCase := func(key string, names ...string) bool {
+		for _, name := range names {
+			if key != name && strings.EqualFold(key, name) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, key := range meta.Keys() {
+		if wrongCase(key[0], "profile", "profiles") {
+			return errors.New("incorrect capitalization in Codex profile configuration")
+		}
+		if key[0] == "profiles" {
+			if len(key) < 3 {
+				continue
+			}
+			key = key[2:]
+		}
+		if wrongCase(key[0], "projects", "project_root_markers") ||
+			key[0] == "projects" && len(key) >= 3 && wrongCase(key[2], "trust_level") {
+			return errors.New("incorrect capitalization in Codex trust configuration")
+		}
+	}
+	return nil
 }
 
 func codexReason(ctx context.Context, c checkout, original string) string {
@@ -52,51 +88,164 @@ func codexReason(ctx context.Context, c checkout, original string) string {
 	if reason := managedCodexReason(ctx, home); reason != "" {
 		return reason
 	}
+	var system codexLayer
+	data, err := readProfile(systemCodexConfigPath(), c)
+	if !errors.Is(err, os.ErrNotExist) && (err != nil || decodeCodexTrust(data, &system) != nil) {
+		return "the system Codex configuration is unreadable"
+	}
 	source, err := readProfile(filepath.Join(home, "config.toml"), c)
 	var user codexUser
-	if err != nil || toml.Unmarshal(source, &user) != nil {
+	if err != nil || decodeCodexTrust(source, &user) != nil {
 		return "the saved Codex trust configuration is unavailable"
 	}
-	const windows = runtime.GOOS == "windows"
-	keys := codexKeys(codexCanonicalPath(c.cwd, original), original, windows)
-	if entry, _ := user.Projects.lookup(keys, windows); entry.Trust != "trusted" {
-		if entry.Trust == "untrusted" {
-			return "Codex explicitly marks this working directory untrusted"
+	var profiles []codexLayer
+	if user.Profile != "" {
+		if !safeProfileName(user.Profile) {
+			return "the saved Codex profile is invalid"
 		}
-		if !samePath(c.cwd, c.root) {
-			root, _ := user.Projects.lookup(codexKeys(codexCanonicalPath(c.root, c.root), c.root, windows), windows)
-			if root.Trust == "trusted" {
-				return "Codex trusts the repository root only. A more specific denial is possible. Open the session at the trusted repository root"
+		embedded, hasEmbedded := user.Profiles[user.Profile]
+		if hasEmbedded {
+			profiles = append(profiles, embedded)
+		}
+		data, err := readProfile(filepath.Join(home, user.Profile+".config.toml"), c)
+		var profile codexLayer
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+			if !hasEmbedded {
+				return "the saved Codex profile is unavailable"
 			}
+		case err != nil || decodeCodexTrust(data, &profile) != nil:
+			return "the saved Codex profile is unreadable"
+		default:
+			profiles = append(profiles, profile)
 		}
-		return "Codex has no saved trusted entry for the exact working directory"
 	}
-	if user.Profile == "" {
+	return codexSavedReason(c, original, system, user.codexLayer, profiles)
+}
+
+func codexSavedReason(c checkout, original string, system, user codexLayer, profiles []codexLayer) string {
+	markers := user.ProjectRootMarkers
+	if markers == nil {
+		markers = system.ProjectRootMarkers
+	}
+	inherit := defaultCodexMarkers(markers)
+	for _, profile := range profiles {
+		inherit = inherit && defaultCodexMarkers(profile.ProjectRootMarkers)
+	}
+	keys := codexWorkspaceKeys(c, original, inherit)
+	const windows = runtime.GOOS == "windows"
+	decision := func(projects codexProjects) codexTrustLevel {
+		entry, _ := projects.lookup(keys, windows)
+		if entry.Trust == "trusted" && inherit && codexDeniedProjectLayer(c, original, projects) {
+			return "untrusted"
+		}
+		return entry.Trust
+	}
+	switch decision(user.Projects) {
+	case "untrusted":
+		return "Codex explicitly marks this workspace untrusted"
+	case "":
+		if !inherit {
+			return "custom Codex project root markers require saved trust for the exact working directory"
+		}
+		return "Codex has no saved user trust for this workspace"
+	}
+	if len(system.Projects) == 0 && len(profiles) == 0 {
 		return ""
 	}
-	if !safeProfileName(user.Profile) {
-		return "the saved Codex profile is invalid"
+	// Codex merges layers by literal TOML key before looking up workspace paths.
+	// A system entry for a more specific directory can deny an inherited user grant.
+	effective := make(codexProjects)
+	effective.apply(system.Projects)
+	effective.apply(user.Projects)
+	if decision(effective) != "trusted" {
+		return "the system Codex configuration does not trust this workspace"
 	}
-	if profile, ok := user.Profiles[user.Profile]; ok && profileVetoes(profile, keys) {
-		return "the saved Codex profile does not trust this working directory"
-	}
-	file := filepath.Join(home, user.Profile+".config.toml")
-	data, err := readProfile(file, c)
-	if errors.Is(err, os.ErrNotExist) {
-		// A legacy profile can be embedded in config.toml.
-		if _, exists := user.Profiles[user.Profile]; exists {
-			return ""
+	for _, profile := range profiles {
+		effective.apply(profile.Projects)
+		if profileVetoes(profile, keys) || decision(effective) != "trusted" {
+			return "the saved Codex profile does not trust this workspace"
 		}
-		return "the saved Codex profile is unavailable"
-	}
-	var profile codexLayer
-	if err != nil || toml.Unmarshal(data, &profile) != nil {
-		return "the saved Codex profile is unreadable"
-	}
-	if profileVetoes(profile, keys) {
-		return "the saved Codex profile does not trust this working directory"
 	}
 	return ""
+}
+
+// An exact cwd decision precedes any disabled project layer. When a grant is
+// inherited, Codex also honors disabled .codex directories between the cwd and
+// the checkout root, including empty layers. Inspect directory metadata only.
+func codexDeniedProjectLayer(c checkout, original string, projects codexProjects) bool {
+	const windows = runtime.GOOS == "windows"
+	if c.cwd == c.root {
+		return false
+	}
+	if _, exact := projects.lookup(codexKeys(codexCanonicalPath(c.cwd, original), original, windows), windows); exact {
+		return false
+	}
+	raw := filepath.Dir(original)
+	for directory := filepath.Dir(c.cwd); directory != c.root; directory = filepath.Dir(directory) {
+		keys := codexKeys(codexCanonicalPath(directory, raw), raw, windows)
+		if p, _ := projects.lookup(keys, windows); p.Trust == "untrusted" {
+			info, err := os.Stat(filepath.Join(raw, ".codex"))
+			if err == nil && info.IsDir() || err != nil && !errors.Is(err, os.ErrNotExist) {
+				return true
+			}
+		}
+		raw = filepath.Dir(raw)
+	}
+	return false
+}
+
+func (projects codexProjects) apply(layer codexProjects) {
+	for path, entry := range layer {
+		if entry.Trust != "" {
+			projects[path] = entry
+		}
+	}
+}
+
+func defaultCodexMarkers(markers []string) bool {
+	return markers == nil || slices.Equal(markers, []string{".git"})
+}
+
+func codexWorkspaceKeys(c checkout, original string, inherit bool) []string {
+	const windows = runtime.GOOS == "windows"
+	keys := codexKeys(codexCanonicalPath(c.cwd, original), original, windows)
+	if !inherit {
+		return keys
+	}
+	// Codex walks the original cwd's ancestors. A path through a symlink can
+	// reach the event directory without passing through its physical checkout.
+	// Only inherit when both walks reach the same directories through the root.
+	project := filepath.Clean(original)
+	for dir := c.cwd; ; dir = filepath.Dir(dir) {
+		if !sameDirectory(project, dir) {
+			return keys
+		}
+		if dir == c.root {
+			break
+		}
+		project = filepath.Dir(project)
+	}
+	if c.cwd != c.root {
+		keys = append(keys, codexKeys(codexCanonicalPath(c.root, project), project, windows)...)
+	}
+	if c.worktreeGitDir == "" {
+		return keys
+	}
+	// The upstream Git trust key retains the main checkout spelling in the
+	// linked worktree's gitdir pointer. Verify its owner before consulting it.
+	admin := c.worktreeGitDir
+	if !filepath.IsAbs(admin) {
+		admin = filepath.Join(project, admin)
+	}
+	if !isDir(admin) {
+		return keys
+	}
+	main := filepath.Dir(filepath.Dir(filepath.Dir(admin)))
+	if !sameDirectory(filepath.Join(main, ".git"), c.common) || !sameDirectory(main, filepath.Dir(c.common)) {
+		return keys
+	}
+	return append(keys, codexKeys(codexCanonicalPath(filepath.Dir(c.common), main), main, windows)...)
 }
 
 // Codex 0.172.0 tries the physical cwd, then the original event spelling. On

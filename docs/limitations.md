@@ -9,7 +9,7 @@ Flinch checks authorization on every event before reading project settings, crea
 | Host | What authorizes the event |
 | --- | --- |
 | Claude Code | A positive saved trust entry for the main checkout, a Desktop session whose project directory belongs to the event's clone, or an explicit clone grant. Registered linked worktrees share the clone. An independent nested repository needs its own authorization. |
-| Codex | A positive saved user entry for the event's exact directory. A saved profile can revoke it. Managed configuration, system requirements, managed preferences, a cached organization policy, or failure to inspect those sources disables activation. |
+| Codex | A positive user decision for the workspace, subject to system settings and saved profile revocations. Managed configuration, system requirements, managed preferences, a cached organization policy, or failure to inspect those sources disables activation. |
 | Antigravity | A saved `trustedWorkspaces` entry for the checkout or an explicit clone grant. The App and IDE can lack a saved entry. Activity is visible in `flinch doctor`. |
 
 After reviewing a clone, run `flinch enable` there to grant access to Claude Code and Antigravity. `flinch disable` removes the grant, but trust saved in the host still applies. A clone pause takes precedence over both.
@@ -20,13 +20,19 @@ The Desktop marker identifies the session, not the folder. It counts only when t
 
 ### Codex
 
-Flinch requires a user entry for the event's exact directory and follows Codex 0.172.0's lookup order: the canonical path first, then the original spelling. For each key an exact match wins. On Windows, the lexicographically smallest key that matches under ASCII case folding wins otherwise. [Codex project lookup](https://github.com/openai/codex/blob/3d86e43b075adeba2193ec5c22ac92f55afd82e6/codex-rs/config/src/loader/mod.rs#L1621-L1659)
+With the default `project_root_markers = [".git"]`, Flinch looks for a saved decision in the event directory, the checkout root and the main checkout of a verified linked worktree, in that order. Only the base user configuration can grant access. A more specific system denial still applies unless the user overrides that same key. A saved profile can veto a grant. With custom markers, including an empty list, Flinch requires trust for the exact event directory. If a path alias prevents Flinch from verifying the same checkout ancestry, it also uses only the event directory. [Codex configuration layers](https://github.com/openai/codex/blob/3d86e43b075adeba2193ec5c22ac92f55afd82e6/codex-rs/config/src/loader/mod.rs#L345-L390) · [Workspace decision](https://github.com/openai/codex/blob/3d86e43b075adeba2193ec5c22ac92f55afd82e6/codex-rs/config/src/loader/mod.rs#L1124-L1149)
+
+For each directory, Codex 0.172.0 tries the canonical path before the original spelling. Each key uses an exact match first. On Windows the lexicographically smallest key that matches under ASCII case folding wins otherwise. [Codex path lookup](https://github.com/openai/codex/blob/3d86e43b075adeba2193ec5c22ac92f55afd82e6/codex-rs/config/src/loader/mod.rs#L1621-L1659)
+
+A directory between the event directory and the checkout root can have its own project configuration layer. If that directory contains a `.codex` directory and has a saved denial, Flinch leaves the hook inactive under an inherited grant. An empty `.codex` directory also counts. Flinch checks directory metadata and gives an exact event-directory decision precedence. [Codex project decision](https://github.com/openai/codex/blob/3d86e43b075adeba2193ec5c22ac92f55afd82e6/codex-rs/config/src/loader/mod.rs#L423-L441) · [Project layer discovery](https://github.com/openai/codex/blob/3d86e43b075adeba2193ec5c22ac92f55afd82e6/codex-rs/config/src/loader/mod.rs#L1889-L1923)
 
 Flinch reads organization policy from the copy Codex saves on disk, under the active Codex home. A cached configuration or requirements fragment disables Flinch, even when it names the same key as a user grant. A nonempty bundle cached from a previous policy server keeps Flinch inactive too. If Codex applies a policy it could not save, Flinch can't see it. In that case, when the cache is missing or still holds an empty bundle, Flinch follows the user's saved trust. [Codex cache publication](https://github.com/openai/codex/blob/3d86e43b075adeba2193ec5c22ac92f55afd82e6/codex-rs/cloud-config/src/service.rs#L382-L406)
 
 | User trust | Session opens in | Result when other checks pass |
 | --- | --- | --- |
-| Repository root only | A subdirectory | Inactive. Open the session at the trusted repository root. |
+| Main checkout only | A subdirectory or a registered linked worktree | Active with default project markers. |
+| Trusted main checkout and an untrusted worktree | That worktree or a subdirectory without its own decision | Inactive. |
+| Trusted worktree and an untrusted event directory | That event directory | Inactive. |
 | Exact directory, with a cached organization policy | That directory | Inactive, including when both layers use an identical key. |
 | Repository root | That root | Active. |
 

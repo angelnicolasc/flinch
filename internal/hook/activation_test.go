@@ -24,19 +24,17 @@ func TestCodexSessionDirectoryControlsEveryHook(t *testing.T) {
 	start := func(dir string) Response {
 		return regressionHook(t, dir, HostCodex, "UserPromptSubmit", map[string]any{"prompt": "synthetic fixture"})
 	}
-	before := hookFootprint(t, repo)
-	if r := start(sub); len(r.Stdout) != 0 || !reflect.DeepEqual(before, hookFootprint(t, repo)) {
-		t.Fatal("root trust activated a subdirectory")
-	}
-	if got := start(root); !strings.Contains(string(got.Stdout), "active in this repo") {
-		t.Fatalf("missing root activation: %s", got.Stdout)
+	if got := start(sub); !strings.Contains(string(got.Stdout), "active in this repo") {
+		t.Fatalf("missing inherited activation: %s", got.Stdout)
 	}
 	config := filepath.Join(os.Getenv("CODEX_HOME"), "config.toml")
-	if err = os.WriteFile(config, []byte("[projects."+strconv.Quote(root)+"]\ntrust_level=\"untrusted\"\n"), 0600); err != nil {
+	denied := "[projects." + strconv.Quote(root) + "]\ntrust_level=\"trusted\"\n" +
+		"[projects." + strconv.Quote(sub) + "]\ntrust_level=\"untrusted\"\n"
+	if err = os.WriteFile(config, []byte(denied), 0600); err != nil {
 		t.Fatal(err)
 	}
-	before = hookFootprint(t, repo)
-	data, _ := json.Marshal(map[string]any{"cwd": root, "session_id": "regression"})
+	before := hookFootprint(t, repo)
+	data, _ := json.Marshal(map[string]any{"cwd": sub, "session_id": "regression"})
 	got := Handle(context.Background(), HostCodex, "Stop", data, "")
 	if len(got.Stdout) != 0 || !reflect.DeepEqual(before, hookFootprint(t, repo)) {
 		t.Fatal("revocation did not stop the following event")

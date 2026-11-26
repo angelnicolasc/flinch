@@ -4,6 +4,10 @@ All notable changes to Flinch are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Fixed
+
+- Codex hooks recognize a trusted main checkout from its subdirectories and registered linked worktrees with the default Git project marker. More specific workspace decisions and saved profile revocations still apply.
+
 ## [0.1.3] - 2026-11-25
 
 ### Added

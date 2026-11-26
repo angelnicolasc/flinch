@@ -109,7 +109,7 @@ func record(path, level string) string {
 	return "[projects." + strconv.Quote(path) + "]\ntrust_level = " + strconv.Quote(level) + "\n"
 }
 
-func TestCodexRequiresExactSavedCwd(t *testing.T) {
+func TestCodexRequiresSavedWorkspaceTrust(t *testing.T) {
 	_, root := sandbox(t)
 	source := filepath.Join(os.Getenv("CODEX_HOME"), "config.toml")
 	sub := filepath.Join(root, "src")
@@ -122,8 +122,8 @@ func TestCodexRequiresExactSavedCwd(t *testing.T) {
 		if got := lookup(root); got.Active != (value == "trusted") {
 			t.Fatalf("%q: %+v", value, got)
 		}
-		if lookup(sub).Active {
-			t.Fatal("inherited root trust for a more specific cwd")
+		if got := lookup(sub); got.Active != (value == "trusted") {
+			t.Fatalf("subdirectory with root trust %q: %+v", value, got)
 		}
 	}
 	write(t, source, record(root, "trusted")+record(sub, "untrusted"))
@@ -356,7 +356,7 @@ func TestCodexCloudCacheAndUserTrust(t *testing.T) {
 		// record. Flinch follows the saved trust as documented in limitations.md.
 		{"absent cache and original user spelling", root, root, "", "", true},
 		{"empty bundle at root", root, root, cache, bundle(empty, empty), true},
-		{"trusted root and session in subdirectory", sub, root, cache, bundle(empty, empty), false},
+		{"trusted root and session in subdirectory", sub, root, cache, bundle(empty, empty), true},
 		{"cloud and user have identical keys", root, root, cache, bundle(fragment(record(root, "untrusted")), empty), false},
 		{"cloud and user have different spellings", root, root, cache, bundle(fragment(record(strings.ToLower(root), "untrusted")), empty), false},
 		{"namespaced requirements", root, root, namespaced, bundle(empty, fragment("allow_login = false")), false},
@@ -478,5 +478,202 @@ func TestCodexExactSubdirectoryTrustTakesPrecedence(t *testing.T) {
 	write(t, filepath.Join(os.Getenv("CODEX_HOME"), "config.toml"), record(root, "untrusted")+record(cwd, "trusted"))
 	if got := Evaluate(context.Background(), "codex", cwd, nil); !got.Active {
 		t.Fatalf("explicit cwd trust: %+v", got)
+	}
+}
+
+func TestCodexLinkedWorkspaceDecisions(t *testing.T) {
+	_, root := sandbox(t)
+	worktree := linkedCheckout(t, root)
+	sub := filepath.Join(worktree, "src")
+	if err := os.Mkdir(sub, 0700); err != nil {
+		t.Fatal(err)
+	}
+	nested := filepath.Join(worktree, "independent")
+	git(t, worktree, "init", "--quiet", nested)
+	base := filepath.Join(os.Getenv("CODEX_HOME"), "config.toml")
+	rootGrant := record(root, "trusted")
+	for _, tc := range []struct {
+		name, cwd, config string
+		active            bool
+	}{
+		{"main checkout grants worktree", worktree, rootGrant, true},
+		{"main checkout grants worktree subdirectory", sub, rootGrant, true},
+		{"worktree denies its subdirectory", sub, rootGrant + record(worktree, "untrusted"), false},
+		{"worktree grant precedes main denial", sub, record(root, "untrusted") + record(worktree, "trusted"), true},
+		{"cwd denial precedes worktree grant", sub, record(worktree, "trusted") + record(sub, "untrusted"), false},
+		{"cwd grant precedes worktree denial", sub, record(worktree, "untrusted") + record(sub, "trusted"), true},
+		{"outer checkout cannot grant a nested repo", nested, rootGrant + record(worktree, "trusted"), false},
+		{"explicit default markers allow inheritance", sub, "project_root_markers = ['.git']\n" + rootGrant, true},
+		{"custom markers require exact trust", sub, "project_root_markers = ['project.toml', '.git']\n" + rootGrant, false},
+		{"empty markers require exact trust", sub, "project_root_markers = []\n" + rootGrant, false},
+		{"exact grant with custom markers", sub, "project_root_markers = []\n" + record(sub, "trusted"), true},
+		{"invalid markers disable activation", sub, "project_root_markers = true\n" + record(sub, "trusted"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			write(t, base, tc.config)
+			if got := Evaluate(context.Background(), "codex", tc.cwd, nil); got.Active != tc.active {
+				t.Fatalf("active = %t, want %t (%s)", got.Active, tc.active, got.Reason)
+			}
+		})
+	}
+	selected := "profile = 'work'\n" + rootGrant
+	deny := record(worktree, "untrusted")
+	for _, tc := range []struct{ name, embedded, file string }{
+		{"standalone profile denies worktree", "", deny},
+		{"standalone profile uses custom markers", "", "project_root_markers = []\n"},
+		{"embedded profile denies worktree", strings.Replace(deny, "[projects.", "[profiles.work.projects.", 1), ""},
+		{"embedded profile uses custom markers", "[profiles.work]\nproject_root_markers = []\n", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			write(t, base, selected+tc.embedded)
+			if tc.file != "" {
+				path := filepath.Join(filepath.Dir(base), "work.config.toml")
+				write(t, path, tc.file)
+				t.Cleanup(func() { _ = os.Remove(path) })
+			}
+			if got := Evaluate(context.Background(), "codex", sub, nil); got.Active {
+				t.Fatalf("profile authorized inherited trust: %+v", got)
+			}
+		})
+	}
+}
+
+func TestCodexSystemLayerWorkspaceTrust(t *testing.T) {
+	_, root := sandbox(t)
+	sub := filepath.Join(root, "src")
+	if err := os.Mkdir(sub, 0700); err != nil {
+		t.Fatal(err)
+	}
+	c, err := findCheckout(context.Background(), sub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootGrant := codexLayer{Projects: codexProjects{root: {"trusted"}}}
+	subGrant := codexLayer{Projects: codexProjects{sub: {"trusted"}}}
+	subDeny := codexLayer{Projects: codexProjects{sub: {"untrusted"}}}
+	markers := codexLayer{ProjectRootMarkers: []string{"go.mod"}}
+	for _, tc := range []struct {
+		name         string
+		system, user codexLayer
+		active       bool
+	}{
+		{"system cannot grant", rootGrant, codexLayer{}, false},
+		{"specific system denial precedes inherited user grant", subDeny, rootGrant, false},
+		{"user overrides same system key", subDeny, subGrant, true},
+		{"system custom markers disable inheritance", markers, rootGrant, false},
+		{"system custom markers keep exact user trust", markers, subGrant, true},
+		{"user default markers override system", markers, codexLayer{Projects: rootGrant.Projects, ProjectRootMarkers: []string{".git"}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if reason := codexSavedReason(c, sub, tc.system, tc.user, nil); (reason == "") != tc.active {
+				t.Fatalf("want active %t, got reason %q", tc.active, reason)
+			}
+		})
+	}
+}
+
+func TestCodexInheritedGrantChecksEnclosingProjectLayers(t *testing.T) {
+	_, root := sandbox(t)
+	worker := linkedCheckout(t, root)
+	project := filepath.Join(worker, "packages")
+	cwd := filepath.Join(project, "service")
+	if err := os.MkdirAll(cwd, 0700); err != nil {
+		t.Fatal(err)
+	}
+	c, err := findCheckout(context.Background(), cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mainGrant := codexLayer{Projects: codexProjects{root: {"trusted"}}}
+	layerDenial := codexLayer{Projects: codexProjects{project: {"untrusted"}}}
+	user := codexLayer{Projects: codexProjects{root: {"trusted"}, project: {"untrusted"}}}
+	if reason := codexSavedReason(c, cwd, codexLayer{}, user, nil); reason != "" {
+		t.Fatalf("directory without a project layer vetoed trust: %s", reason)
+	}
+	if err := os.Mkdir(filepath.Join(project, ".codex"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name         string
+		system, user codexLayer
+		profiles     []codexLayer
+		active       bool
+	}{
+		{"user denies enclosing layer", codexLayer{}, user, nil, false},
+		{"system denies enclosing layer", layerDenial, mainGrant, nil, false},
+		{"profile denies enclosing layer", codexLayer{}, mainGrant, []codexLayer{layerDenial}, false},
+		{"empty layer inherits main grant", codexLayer{}, mainGrant, nil, true},
+		{"exact user decision wins", codexLayer{}, codexLayer{Projects: codexProjects{cwd: {"trusted"}, project: {"untrusted"}}}, nil, true},
+		{"user overrides same system key", layerDenial, codexLayer{Projects: codexProjects{root: {"trusted"}, project: {"trusted"}}}, nil, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if reason := codexSavedReason(c, cwd, tc.system, tc.user, tc.profiles); (reason == "") != tc.active {
+				t.Fatalf("want active %t, got reason %q", tc.active, reason)
+			}
+		})
+	}
+}
+
+func TestCodexTrustFieldNamesAreCaseSensitive(t *testing.T) {
+	_, root := sandbox(t)
+	worktree := linkedCheckout(t, root)
+	source := filepath.Join(os.Getenv("CODEX_HOME"), "config.toml")
+	grant := record(root, "trusted")
+	for _, tc := range []struct {
+		name, config string
+		active       bool
+	}{
+		{"exact spelling", grant, true},
+		{"capitalized project table", strings.Replace(grant, "[projects.", "[Projects.", 1), false},
+		{"capitalized trust field", strings.Replace(grant, "trust_level", "Trust_Level", 1), false},
+		{"inline trust field", "projects = {" + strconv.Quote(root) + " = { Trust_Level = 'trusted' }}", false},
+		{"ambiguous marker spelling", "Project_Root_Markers = ['.git']\n" + grant, false},
+		{"unknown unrelated section", "[editor]\nProjects = 'example'\n" + grant, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			write(t, source, tc.config)
+			if got := Evaluate(context.Background(), "codex", worktree, nil); got.Active != tc.active {
+				t.Fatalf("want active %t, got %+v", tc.active, got)
+			}
+		})
+	}
+}
+
+func TestWorktreeGitDirPreservesFilenameWhitespace(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".git")
+	want := "worktrees/feature\u00a0"
+	write(t, path, "gitdir: "+want+"\r\n")
+	got, err := readWorktreeGitDir(path)
+	if err != nil || got != want {
+		t.Fatalf("gitdir = %q, %v; want %q", got, err, want)
+	}
+}
+
+func TestCodexWorkspaceAliasAncestry(t *testing.T) {
+	_, root := sandbox(t)
+	sub := filepath.Join(root, "src")
+	if err := os.Mkdir(sub, 0700); err != nil {
+		t.Fatal(err)
+	}
+	parent := t.TempDir()
+	alias := filepath.Join(parent, "checkout")
+	if err := os.Symlink(root, alias); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("creating a directory symlink requires Windows Developer Mode or privilege: %v", err)
+		}
+		t.Fatal(err)
+	}
+	path := filepath.Join(os.Getenv("CODEX_HOME"), "config.toml")
+	write(t, path, record(alias, "trusted"))
+	if got := Evaluate(context.Background(), "codex", filepath.Join(alias, "src"), nil); !got.Active {
+		t.Fatalf("lost original project root spelling: %+v", got)
+	}
+	childAlias := filepath.Join(parent, "source")
+	if err := os.Symlink(sub, childAlias); err != nil {
+		t.Fatal(err)
+	}
+	write(t, path, record(root, "trusted"))
+	if got := Evaluate(context.Background(), "codex", childAlias, nil); got.Active {
+		t.Fatalf("event path did not traverse the trusted checkout root: %+v", got)
 	}
 }

@@ -22,10 +22,14 @@ Every event goes through a read-only gate before Flinch opens project settings, 
 | Host | What authorizes the event |
 | --- | --- |
 | Claude Code | A saved trusted project for the clone's main checkout, in any spelling Claude writes. Or a Desktop session (`CLAUDE_CODE_ENTRYPOINT=claude-desktop`) whose `CLAUDE_PROJECT_DIR` belongs to the same clone. Or `flinch enable` in the clone. |
-| Codex | A `trusted` entry for the event's exact directory, found in Codex's own lookup order. A saved profile can revoke it. Managed configuration, requirements, managed preferences or a cached organization policy keep the hook inactive. |
+| Codex | A `trusted` base user decision following the saved workspace lookup below. A saved profile can revoke it. Managed configuration, requirements, managed preferences or a cached organization policy keep the hook inactive. |
 | Antigravity | A saved trusted workspace for the checkout, or `flinch enable` in the clone. |
 
+Codex 0.172.0 selects the first saved decision for the event directory, the project root, or the main Git checkout. Its default project marker is `.git`. Flinch follows this order for verified Git checkouts, including registered linked worktrees. An explicit denial at a more specific directory takes precedence over an inherited grant. System settings participate in the lookup, and a positive decision in the base user configuration is required. With custom project markers Flinch requires an exact directory grant. The initial implementation always required that exact grant, which missed the main-checkout decision Codex saves for a new linked worktree. [Codex workspace decision](https://github.com/openai/codex/blob/3d86e43b075adeba2193ec5c22ac92f55afd82e6/codex-rs/config/src/loader/mod.rs#L1124-L1149) · [Git trust root](https://github.com/openai/codex/blob/3d86e43b075adeba2193ec5c22ac92f55afd82e6/codex-rs/git-utils/src/trust.rs#L181-L223)
+
 The clone grant lives in the Git common directory, which a clone never receives from its remote. Codex always decides for itself, and the grant never overrides it.
+
+Before accepting inherited Codex trust, Flinch checks for a saved denial on an enclosing project configuration layer. Only the presence of its `.codex` directory matters for this decision. The gate does not open configuration files from the checkout. [Codex project decision](https://github.com/openai/codex/blob/3d86e43b075adeba2193ec5c22ac92f55afd82e6/codex-rs/config/src/loader/mod.rs#L423-L441)
 
 The first active event in a clone shows one line in Claude Code and Codex. Antigravity has no passive channel, so `flinch doctor` reports it there. A command or script check defined by the repository needs its own approval with `flinch allow-commands`, bound to its contents. `flinch pause`, `FLINCH=off` and `flinch setup --remove` turn Flinch off for a clone, a session or the user. [Hosts and workspace trust](../hosts.md)
 
