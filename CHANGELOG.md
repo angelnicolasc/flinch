@@ -4,29 +4,36 @@ All notable changes to Flinch are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-25
+
+### Added
+
+- `docs/ci.md` shows how to require `flinch check --ci --base` on pull requests, including when an agent repairs a pull request and commits without the repository's Git hooks.
+
 ### Changed
 
+- The Windows installation block finds the latest release without the GitHub API, which can rate-limit anonymous requests. It verifies the archive and extracts only the executable before it replaces an existing installation.
 - `flinch doctor` distinguishes checks in the trusted revision from working-tree records and shows how many of those records have a local proof. It reports the last turn each host checked in the clone. A proof notice explains when the check applies locally and how to share it with other checkouts and CI.
 
 ### Fixed
 
-- An integrity finding for an ambiguous Vitest or Jest selector explains how to identify the test by its suite name.
-- When a correction changes a shared Vitest or Jest table callback, Flinch tries its rows before unrelated test edits.
-- Go test discovery preserves the enclosing test when it calls an unrelated `Run` method.
-- A Go table row can add its own setup without invalidating another row. Changes to setup used by the protected row or its loop still trigger an integrity finding.
-- Go integrity checks distinguish a nested subtest from its siblings.
-- TypeScript table tests with nested or function type arguments retain their row selectors.
-- JavaScript regular expressions after logical operators or a semicolon no longer conceal tests during discovery or integrity checks.
-- Pytest checks protect the body of a decorated test, and a change to its parameters can nominate the test for reuse.
-- The proved-test notice explains when the case protects later turns in the same checkout and how to share it with CI.
-- `flinch doctor` and `flinch init` report healthy checks even when the event history cannot be read.
 - Stop can return a regression before the fix is committed. A check proven in the clone applies while its record and protected case match at the start of a turn, including after edits to sibling tests. Editing the protected case or deleting its record during that turn triggers an integrity finding.
+- Flinch can prove an existing Go, pytest, Vitest, or Jest case when a correction changes what it tests. It tries cases at the lines that triggered the nomination first. A turn that repairs a protected case or exhausts its repair budget closes without registering the reversed expectation.
+- `flinch check --ci --base` reports a deleted check record from the PR base and exits with status 1. Previously, CI looked for records in the proposed checkout, so deleting a record also removed it from the integrity check.
+- Pytest checks protect the body of a decorated test, and a change to its parameters can nominate the test for reuse.
 - Stop detects a suppression restored during a turn even when another check was already committed. A directive added against both the reviewed and opening revisions appears once.
 - `flinch check --ci --base` reports an error before running checks if the requested revision is missing.
 - Stop and CI read direct check records from Git, including IDs with non-ASCII characters. Records stored in archive subdirectories stay outside the catalog.
-- `flinch check --ci --base` reports a deleted check record from the PR base and exits with status 1. Previously, CI looked for records in the proposed checkout, so deleting a record also removed it from the integrity check.
-- Flinch can prove an existing Go, pytest, Vitest, or Jest case when a correction changes what it tests. It tries cases at the lines that triggered the nomination first. A turn that repairs a protected case or exhausts its repair budget closes without registering the reversed expectation.
+- JavaScript regular expressions after logical operators or a semicolon no longer conceal tests during discovery or integrity checks.
+- TypeScript table tests with nested or function type arguments retain their row selectors.
+- Go integrity checks distinguish a nested subtest from its siblings.
+- A Go table row can add its own setup without invalidating another row. Changes to setup used by the protected row or its loop still trigger an integrity finding.
+- Go test discovery preserves the enclosing test when it calls an unrelated `Run` method.
+- When a correction changes a shared Vitest or Jest table callback, Flinch tries its rows before unrelated test edits.
 - Integrity checks for Vitest and Jest use the full suite and case name, including named table rows. Editing a same-named case in another suite leaves the protected case intact.
+- An integrity finding for an ambiguous Vitest or Jest selector explains how to identify the test by its suite name.
+- The proved-test notice explains when the case protects later turns in the same checkout and how to share it with CI.
+- `flinch doctor` and `flinch init` report healthy checks even when the event history cannot be read.
 
 ## [0.1.2] - 2026-11-25
 
@@ -64,7 +71,8 @@ First public release. Claude Code, Codex and Antigravity support is in Preview.
 - Check records under `.flinch/checks/`, checked against the trusted revision so that a deleted or weakened check is reported.
 - `flinch doctor`, `pause`, `resume`, `skip`, `report`, `check --ci` and `prove`.
 
-[Unreleased]: https://github.com/angelnicolasc/flinch/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/angelnicolasc/flinch/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/angelnicolasc/flinch/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/angelnicolasc/flinch/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/angelnicolasc/flinch/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/angelnicolasc/flinch/releases/tag/v0.1.0
