@@ -4,6 +4,12 @@ All notable changes to Flinch are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-11-26
+
+### Added
+
+- `docs/hosts.md` describes how to verify Flinch in Orca terminals, Orca Native Chat and T3 Code worktree threads with Claude Code and Codex, including dependency setup, hook coexistence and the evidence to keep. The six combinations await a recorded session.
+
 ### Changed
 
 - Every Stop that reaches enforcement leaves one outcome in the clone's event log, including a turn whose deadline expired before a verdict. The outcome records the time spent in each phase, and a test timeout names the limit that stopped it. `flinch stats` reports deferred turns and the share of turns with a verdict. Stop duration now includes the post-turn snapshot.
@@ -79,7 +85,8 @@ First public release. Claude Code, Codex and Antigravity support is in Preview.
 - Check records under `.flinch/checks/`, checked against the trusted revision so that a deleted or weakened check is reported.
 - `flinch doctor`, `pause`, `resume`, `skip`, `report`, `check --ci` and `prove`.
 
-[Unreleased]: https://github.com/angelnicolasc/flinch/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/angelnicolasc/flinch/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/angelnicolasc/flinch/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/angelnicolasc/flinch/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/angelnicolasc/flinch/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/angelnicolasc/flinch/compare/v0.1.0...v0.1.1
