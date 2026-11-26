@@ -4,6 +4,10 @@ All notable changes to Flinch are recorded here. The format follows [Keep a Chan
 
 ## [Unreleased]
 
+### Changed
+
+- Every Stop that reaches enforcement leaves one outcome in the clone's event log, including a turn whose deadline expired before a verdict. The outcome records the time spent in each phase, and a test timeout names the limit that stopped it. `flinch stats` reports deferred turns and the share of turns with a verdict. Stop duration now includes the post-turn snapshot.
+
 ### Fixed
 
 - Codex hooks recognize a trusted main checkout from its subdirectories and registered linked worktrees with the default Git project marker. More specific workspace decisions and saved profile revocations still apply.
